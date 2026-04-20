@@ -1,0 +1,15 @@
+bin/
+obj/
+publish/
+.vs/
+.vscode/
+
+*.user
+*.suo
+*.cache
+*.pdb
+*.log
+*.tmp
+
+src/**/bin/
+src/**/obj/

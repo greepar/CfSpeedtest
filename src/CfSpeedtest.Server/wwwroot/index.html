@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloudflare IP 测速管理面板</title>
+<style>
+:root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e4e4e7;
+    --text2: #a1a1aa;
+    --accent: #f97316;
+    --accent2: #fb923c;
+    --green: #22c55e;
+    --red: #ef4444;
+    --blue: #3b82f6;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+}
+.header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .dot { width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block; }
+
+.tabs {
+    display: flex;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+}
+.tab {
+    padding: 12px 20px;
+    cursor: pointer;
+    color: var(--text2);
+    border-bottom: 2px solid transparent;
+    font-size: 14px;
+    transition: all .2s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.panel { display: none; }
+.panel.active { display: block; }
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+}
+.card h2 { font-size: 16px; margin-bottom: 12px; color: var(--accent); }
+.card h3 { font-size: 14px; margin-bottom: 8px; color: var(--text2); }
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+.stat-card .value { font-size: 28px; font-weight: 700; color: var(--accent); }
+.stat-card .label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+th { color: var(--text2); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+tr:hover td { background: rgba(249,115,22,.05); }
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.badge-telecom { background: #1e3a5f; color: #60a5fa; }
+.badge-unicom { background: #1a3d2e; color: #4ade80; }
+.badge-mobile { background: #3d2d1a; color: #fbbf24; }
+.badge-online { background: #14532d; color: #22c55e; }
+.badge-offline { background: #451a1a; color: #f87171; }
+
+input, textarea, select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    width: 100%;
+    outline: none;
+}
+input:focus, textarea:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 80px; font-family: monospace; }
+
+.btn {
+    display: inline-block;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all .2s;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-secondary { background: var(--border); color: var(--text); }
+.btn-secondary:hover { background: #3a3d4a; }
+
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 4px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 999;
+    animation: slideIn .3s;
+}
+.toast-ok { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+.toast-err { background: #451a1a; color: #f87171; border: 1px solid #7f1d1d; }
+@keyframes slideIn { from { transform: translateX(100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
+
+.speed-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 4px;
+}
+.speed-bar .fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--green));
+    transition: width .5s;
+}
+.empty-state { text-align: center; padding: 40px; color: var(--text2); }
+
+.source-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.source-row select { width: 120px; flex-shrink: 0; }
+.source-row input { flex: 1; }
+.btn-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+}
+.preview-box {
+    margin-top: 4px;
+    margin-bottom: 8px;
+    padding: 8px;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+    max-height: 150px;
+    overflow-y: auto;
+    display: none;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.pool-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.danger-btn {
+    color: #fff;
+    background: var(--red);
+}
+.danger-btn:hover {
+    background: #dc2626;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <span class="dot"></span>
+    <h1>Cloudflare IP SpeedTest</h1>
+</div>
+
+<div class="tabs main-tabs">
+    <div class="tab main-tab active" onclick="switchTab('dashboard')">概览</div>
+    <div class="tab main-tab" onclick="switchTab('history')">测速记录</div>
+    <div class="tab main-tab" onclick="switchTab('clients')">客户端</div>
+    <div class="tab main-tab" onclick="switchTab('ippool')">IP 池</div>
+    <div class="tab main-tab" onclick="switchTab('dns')">DNS 更新</div>
+    <div class="tab main-tab" onclick="switchTab('settings')">配置</div>
+</div>
+
+<div class="container">
+
+<!-- ========== Dashboard ========== -->
+<div id="panel-dashboard" class="panel active">
+    <div class="stats" id="stats-cards"></div>
+    <div class="card">
+        <h2>最新测速结果</h2>
+        <div id="latest-results"></div>
+    </div>
+</div>
+
+<!-- ========== History ========== -->
+<div id="panel-history" class="panel">
+    <div class="card">
+        <h2>测速历史</h2>
+        <div id="history-list"></div>
+    </div>
+</div>
+
+<!-- ========== Clients ========== -->
+<div id="panel-clients" class="panel">
+    <div class="card">
+        <h2>已注册客户端</h2>
+        <div id="clients-list"></div>
+    </div>
+</div>
+
+<!-- ========== IP Pool ========== -->
+<div id="panel-ippool" class="panel">
+    <div class="card">
+        <h2>IP 池管理</h2>
+        
+        <div style="display:flex; gap:8px; margin-bottom:16px;">
+            <div class="tab isp-tab active" onclick="switchIspTab(event,'Telecom')">电信池</div>
+            <div class="tab isp-tab" onclick="switchIspTab(event,'Unicom')">联通池</div>
+            <div class="tab isp-tab" onclick="switchIspTab(event,'Mobile')">移动池</div>
+        </div>
+
+        <div style="background:var(--bg); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <h3 style="margin:0; color:var(--text); font-size:14px;">自动拉取源 (<span class="current-isp-label">电信</span>)</h3>
+                <button class="btn btn-secondary" onclick="addSourceRow()" style="padding:4px 12px;font-size:12px;">+ 添加源</button>
+            </div>
+            
+            <div id="sources-list"></div>
+
+            <div style="margin-top:12px; display:flex; gap:8px;">
+                <button class="btn btn-primary" onclick="savePoolSources()">保存拉取配置</button>
+                <button class="btn btn-secondary" onclick="refreshCurrentPool()">立即拉取当前池</button>
+                <button class="btn btn-secondary" onclick="refreshAllPools()">拉取所有池</button>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>批量添加 IP 到 <span class="current-isp-label">电信</span> 池（每行一个或逗号分隔）</label>
+            <textarea id="add-ips-input" placeholder="1.0.0.1&#10;1.1.1.1&#10;104.16.0.1"></textarea>
+        </div>
+        <div style="margin-bottom:16px;">
+            <button class="btn btn-primary" onclick="addIps()">手动添加 IP</button>
+        </div>
+        
+        <h3>当前 <span class="current-isp-label">电信</span> IP 列表 (<span id="ip-count">0</span>)</h3>
+
+        <div style="background:var(--bg); padding:12px 16px; border-radius:8px; border:1px solid var(--border); margin-bottom:12px; display:flex; align-items:center; gap:12px;">
+            <label style="font-size:13px; color:var(--text2); white-space:nowrap; margin:0;">测速后自动清理</label>
+            <select id="pool-auto-cleanup" style="width:auto;" onchange="toggleAutoCleanup()">
+                <option value="false">关闭</option>
+                <option value="true">启用</option>
+            </select>
+            <span id="pool-cleanup-hint" style="font-size:12px; color:var(--text2);">启用后，每次测速完成自动只保留最优 IP，其余从池中删除</span>
+        </div>
+
+        <div class="pool-toolbar">
+            <button class="btn btn-secondary" onclick="enterPoolEditMode()">文本编辑模式</button>
+            <button class="btn btn-primary" id="save-pool-edit-btn" onclick="savePoolEditMode()" style="display:none;">保存文本修改</button>
+            <button class="btn btn-secondary" id="cancel-pool-edit-btn" onclick="cancelPoolEditMode()" style="display:none;">取消</button>
+        </div>
+        <textarea id="pool-edit-textarea" style="display:none; min-height:240px; margin-bottom:12px;" placeholder="每行一个 IP"></textarea>
+        <div id="ippool-list" style="max-height:400px;overflow-y:auto;"></div>
+    </div>
+</div>
+
+<!-- ========== DNS Update ========== -->
+<div id="panel-dns" class="panel">
+    <div class="card">
+        <h2>华为云 DNS 域名解析更新</h2>
+        <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
+            根据各运营商客户端的测速结果，自动将最优 IP 更新到华为云 DNS 解析记录。
+            每个运营商的客户端分别测速后，系统聚合所有同运营商客户端的 TopN 结果，取最优 IP 更新到对应域名。
+        </p>
+
+        <!-- 华为云全局凭证配置 -->
+        <div style="background:var(--bg); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:20px;">
+            <h3 style="margin:0 0 12px; color:var(--text); font-size:14px;">华为云凭证配置</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>启用自动 DNS 更新</label>
+                    <select id="hw-enabled" style="width:auto;">
+                        <option value="false">关闭</option>
+                        <option value="true">启用</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>自动更新间隔（分钟，0=仅手动触发）</label>
+                    <input id="hw-interval" type="number" value="30" min="0" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>IAM 用户名</label>
+                    <input id="hw-iam-user" placeholder="your-iam-username" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>IAM 密码</label>
+                    <input id="hw-iam-password" type="password" placeholder="your-iam-password" />
+                </div>
+                <div class="form-group">
+                    <label>IAM Domain Name（账号名）</label>
+                    <input id="hw-iam-domain" placeholder="your-domain-name" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>项目 ID (Project ID)</label>
+                    <input id="hw-project-id" placeholder="project-id" />
+                </div>
+                <div class="form-group">
+                    <label>DNS API Endpoint</label>
+                    <input id="hw-endpoint" placeholder="https://dns.cn-north-4.myhuaweicloud.com" />
+                </div>
+            </div>
+            <div class="form-group" style="max-width:calc(50% - 6px);">
+                <label>IAM Endpoint</label>
+                <input id="hw-iam-endpoint" placeholder="https://iam.cn-north-4.myhuaweicloud.com" />
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px;">
+                <button class="btn btn-primary" onclick="saveHuaweiDnsConfig()">保存凭证配置</button>
+                <button class="btn btn-secondary" onclick="testHuaweiConnection()">测试连接</button>
+            </div>
+        </div>
+
+        <!-- 运营商子选项卡 -->
+        <div style="display:flex; gap:8px; margin-bottom:16px;">
+            <div class="tab dns-isp-tab active" onclick="switchDnsIspTab(event,'Telecom')">电信</div>
+            <div class="tab dns-isp-tab" onclick="switchDnsIspTab(event,'Unicom')">联通</div>
+            <div class="tab dns-isp-tab" onclick="switchDnsIspTab(event,'Mobile')">移动</div>
+        </div>
+
+        <!-- 运营商记录集配置 -->
+        <div style="background:var(--bg); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:20px;">
+            <h3 style="margin:0 0 12px; color:var(--text); font-size:14px;">
+                <span class="dns-isp-label">电信</span> 记录集配置
+            </h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Zone ID（域名ID）</label>
+                    <input id="hw-zone-id" placeholder="zone-id-from-huaweicloud" />
+                </div>
+                <div class="form-group">
+                    <label>RecordSet ID（记录集ID）</label>
+                    <input id="hw-recordset-id" placeholder="recordset-id-from-huaweicloud" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>域名（如 ct.example.com）</label>
+                    <input id="hw-domain" placeholder="ct.example.com" />
+                </div>
+                <div class="form-group">
+                    <label>TTL（秒）</label>
+                    <input id="hw-ttl" type="number" value="60" />
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="saveHuaweiDnsRecordConfig()" style="margin-top:8px;">保存 <span class="dns-isp-label">电信</span> 记录配置</button>
+        </div>
+
+        <!-- 手动触发 & 状态 -->
+        <div style="display:flex; gap:8px; margin-bottom:16px;">
+            <button class="btn btn-primary" onclick="triggerDnsUpdate(null)">更新所有运营商 DNS</button>
+            <button class="btn btn-secondary" onclick="triggerDnsUpdate('Telecom')">仅更新电信</button>
+            <button class="btn btn-secondary" onclick="triggerDnsUpdate('Unicom')">仅更新联通</button>
+            <button class="btn btn-secondary" onclick="triggerDnsUpdate('Mobile')">仅更新移动</button>
+            <button class="btn btn-secondary" onclick="loadDnsStatus()">刷新状态</button>
+        </div>
+
+        <div id="dns-status-list"></div>
+    </div>
+</div>
+
+<!-- ========== Settings ========== -->
+<div id="panel-settings" class="panel">
+    <div class="card">
+        <h2>服务器配置</h2>
+        <form id="config-form" onsubmit="saveConfig(event)">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>测速 URL 模板 ({ip} 替换为实际IP)</label>
+                    <input id="cfg-testurl" />
+                </div>
+                <div class="form-group">
+                    <label>HTTPS SNI Host</label>
+                    <input id="cfg-testhost" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>测速端口</label>
+                    <input id="cfg-testport" type="number" />
+                </div>
+                <div class="form-group">
+                    <label>每批分发IP数量</label>
+                    <input id="cfg-batchsize" type="number" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>下载测速时长 (秒)</label>
+                    <input id="cfg-downloaddur" type="number" />
+                </div>
+                <div class="form-group">
+                    <label>TCP 测试时长 (秒)</label>
+                    <input id="cfg-tcpdur" type="number" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>返回 Top N</label>
+                    <input id="cfg-topn" type="number" />
+                </div>
+                <div class="form-group">
+                    <label>客户端轮询间隔 (分钟)</label>
+                    <input id="cfg-client-interval" type="number" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>所有 API 定时拉取间隔 (分钟)</label>
+                    <input id="cfg-apiinterval" type="number" />
+                </div>
+                <div class="form-group"></div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="margin-top:12px;">保存全局配置</button>
+        </form>
+    </div>
+</div>
+
+</div>
+
+<script>
+const ISP_NAMES = { 0: '电信', 1: '联通', 2: '移动', Telecom: '电信', Unicom: '联通', Mobile: '移动' };
+const ISP_CLASSES = { 0: 'badge-telecom', 1: 'badge-unicom', 2: 'badge-mobile', Telecom: 'badge-telecom', Unicom: 'badge-unicom', Mobile: 'badge-mobile' };
+
+let currentIspTab = 'Telecom';
+let allIpPoolData = {};
+let serverConfigData = null;
+
+// ========== Tab switching ==========
+
+function switchTab(name) {
+    var map = { dashboard:'概览', history:'测速记录', clients:'客户端', ippool:'IP 池', dns:'DNS 更新', settings:'配置' };
+    document.querySelectorAll('.main-tab').forEach(function(t) {
+        t.classList.toggle('active', t.textContent.trim() === map[name]);
+    });
+    document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+    document.getElementById('panel-' + name).classList.add('active');
+    if (name === 'dashboard') loadDashboard();
+    if (name === 'history') loadHistory();
+    if (name === 'clients') loadClients();
+    if (name === 'ippool') loadIpPool();
+    if (name === 'dns') loadDnsPanel();
+    if (name === 'settings') loadConfig();
+}
+
+function switchIspTab(e, isp) {
+    currentIspTab = isp;
+    document.querySelectorAll('.isp-tab').forEach(function(t) { t.classList.remove('active'); });
+    e.target.classList.add('active');
+    document.querySelectorAll('.current-isp-label').forEach(function(el) { el.textContent = ISP_NAMES[isp]; });
+    renderSourcesList();
+    renderIpPoolList();
+}
+
+// ========== Helpers ==========
+
+function toast(msg, ok) {
+    if (ok === undefined) ok = true;
+    var d = document.createElement('div');
+    d.className = 'toast ' + (ok ? 'toast-ok' : 'toast-err');
+    d.textContent = msg;
+    document.body.appendChild(d);
+    setTimeout(function() { d.remove(); }, 3000);
+}
+
+function api(path, method, body) {
+    if (!method) method = 'GET';
+    var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    return fetch(path, opts).then(function(r) { return r.json(); });
+}
+
+function fmtTime(s) {
+    if (!s) return '-';
+    return new Date(s).toLocaleString('zh-CN');
+}
+
+// ========== Dashboard ==========
+
+function loadDashboard() {
+    Promise.all([api('/api/clients'), api('/api/history?limit=20'), api('/api/ippool')]).then(function(res) {
+        var clients = res[0].data || [];
+        var history = res[1].data || [];
+        var ipData = res[2].data || {};
+        var totalIps = 0;
+        for (var k in ipData) { totalIps += (ipData[k] || []).length; }
+
+        var online = clients.filter(function(c) {
+            return (Date.now() - new Date(c.lastSeenAt).getTime()) < 5 * 60 * 1000;
+        }).length;
+
+        document.getElementById('stats-cards').innerHTML =
+            '<div class="stat-card"><div class="value">' + clients.length + '</div><div class="label">客户端总数</div></div>' +
+            '<div class="stat-card"><div class="value">' + online + '</div><div class="label">在线</div></div>' +
+            '<div class="stat-card"><div class="value">' + totalIps + '</div><div class="label">IP 池总数</div></div>' +
+            '<div class="stat-card"><div class="value">' + history.length + '</div><div class="label">最近测速次数</div></div>';
+
+        if (history.length === 0) {
+            document.getElementById('latest-results').innerHTML = '<div class="empty-state">暂无测速记录</div>';
+            return;
+        }
+
+        var html = '<table><thead><tr><th>时间</th><th>客户端</th><th>运营商</th><th>最优 IP</th><th>速度</th><th>延迟</th><th>丢包</th></tr></thead><tbody>';
+        history.slice(0, 10).forEach(function(h) {
+            var best = h.results && h.results[0];
+            if (!best) return;
+            html += '<tr>' +
+                '<td>' + fmtTime(h.completedAt) + '</td>' +
+                '<td>' + h.clientId.substring(0,8) + '</td>' +
+                '<td><span class="badge ' + (ISP_CLASSES[h.isp] || '') + '">' + (ISP_NAMES[h.isp] || h.isp) + '</span></td>' +
+                '<td style="font-family:monospace">' + best.ipAddress + '</td>' +
+                '<td>' + best.downloadSpeedKBps.toFixed(1) + ' KB/s</td>' +
+                '<td>' + best.avgLatencyMs.toFixed(1) + ' ms</td>' +
+                '<td>' + (best.packetLossRate * 100).toFixed(1) + '%</td>' +
+                '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('latest-results').innerHTML = html;
+    });
+}
+
+// ========== History ==========
+
+function loadHistory() {
+    api('/api/history?limit=100').then(function(r) {
+        var data = r.data || [];
+        if (data.length === 0) {
+            document.getElementById('history-list').innerHTML = '<div class="empty-state">暂无记录</div>';
+            return;
+        }
+        var html = '';
+        data.forEach(function(h) {
+            html += '<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);">' +
+                '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;">' +
+                '<span class="badge ' + (ISP_CLASSES[h.isp] || '') + '">' + (ISP_NAMES[h.isp] || h.isp) + '</span>' +
+                '<span style="color:var(--text2);font-size:13px;">' + fmtTime(h.completedAt) + '</span>' +
+                '<span style="color:var(--text2);font-size:12px;">客户端: ' + h.clientId.substring(0,8) + '</span>' +
+                '</div>' +
+                '<table><thead><tr><th>排名</th><th>IP</th><th>下载速度</th><th>平均延迟</th><th>最低延迟</th><th>丢包率</th><th>评分</th></tr></thead><tbody>';
+            var results = h.results || [];
+            var maxSpeed = Math.max.apply(null, results.map(function(x) { return x.downloadSpeedKBps; }).concat([1]));
+            results.forEach(function(rr, i) {
+                html += '<tr>' +
+                    '<td>#' + (i+1) + '</td>' +
+                    '<td style="font-family:monospace">' + rr.ipAddress + '</td>' +
+                    '<td>' + rr.downloadSpeedKBps.toFixed(1) + ' KB/s<div class="speed-bar"><div class="fill" style="width:' + (rr.downloadSpeedKBps / maxSpeed * 100).toFixed(0) + '%"></div></div></td>' +
+                    '<td>' + rr.avgLatencyMs.toFixed(1) + ' ms</td>' +
+                    '<td>' + rr.minLatencyMs.toFixed(1) + ' ms</td>' +
+                    '<td>' + (rr.packetLossRate * 100).toFixed(1) + '%</td>' +
+                    '<td>' + rr.score.toFixed(1) + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table></div>';
+        });
+        document.getElementById('history-list').innerHTML = html;
+    });
+}
+
+// ========== Clients ==========
+
+function loadClients() {
+    api('/api/clients').then(function(r) {
+        var data = r.data || [];
+        if (data.length === 0) {
+            document.getElementById('clients-list').innerHTML = '<div class="empty-state">暂无客户端</div>';
+            return;
+        }
+        var html = '<table><thead><tr><th>ID</th><th>名称</th><th>运营商</th><th>状态</th><th>注册时间</th><th>最后活跃</th></tr></thead><tbody>';
+        data.forEach(function(c) {
+            var isOnline = (Date.now() - new Date(c.lastSeenAt).getTime()) < 5 * 60 * 1000;
+            html += '<tr>' +
+                '<td style="font-family:monospace;font-size:12px;">' + c.clientId.substring(0,12) + '</td>' +
+                '<td>' + (c.name || '-') + '</td>' +
+                '<td><span class="badge ' + (ISP_CLASSES[c.isp] || '') + '">' + (ISP_NAMES[c.isp] || c.isp) + '</span></td>' +
+                '<td><span class="badge ' + (isOnline ? 'badge-online' : 'badge-offline') + '">' + (isOnline ? '在线' : '离线') + '</span></td>' +
+                '<td>' + fmtTime(c.registeredAt) + '</td>' +
+                '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
+                '</tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('clients-list').innerHTML = html;
+    });
+}
+
+// ========== IP Pool ==========
+
+function loadIpPool() {
+    var p1 = serverConfigData ? Promise.resolve() : loadConfig();
+    p1.then(function() {
+        return api('/api/ippool');
+    }).then(function(r) {
+        if (r.success) {
+            allIpPoolData = r.data || {};
+        }
+        syncCleanupToggle();
+        renderSourcesList();
+        renderIpPoolList();
+    });
+}
+
+function syncCleanupToggle() {
+    if (serverConfigData) {
+        document.getElementById('pool-auto-cleanup').value = serverConfigData.autoCleanupEnabled ? 'true' : 'false';
+        var topN = serverConfigData.topN || 5;
+        document.getElementById('pool-cleanup-hint').textContent =
+            '启用后，每次测速完成自动只保留 Top ' + topN + ' 最优 IP，其余从池中删除（Top N 在配置页设置）';
+    }
+}
+
+function toggleAutoCleanup() {
+    if (!serverConfigData) return;
+    serverConfigData.autoCleanupEnabled = document.getElementById('pool-auto-cleanup').value === 'true';
+    api('/api/config', 'POST', serverConfigData).then(function(r) {
+        if (r.success) toast('自动清理' + (serverConfigData.autoCleanupEnabled ? '已启用' : '已关闭'));
+        else toast(r.message || '保存失败', false);
+    });
+}
+
+function renderIpPoolList() {
+    var data = allIpPoolData[currentIspTab] || [];
+    document.getElementById('ip-count').textContent = data.length;
+    if (data.length === 0) {
+        document.getElementById('ippool-list').innerHTML = '<div class="empty-state">当前池子为空</div>';
+        return;
+    }
+    var html = '<table><thead><tr><th>#</th><th>IP 地址</th><th style="width:80px;">操作</th></tr></thead><tbody>';
+    data.forEach(function(ip, i) {
+        html += '<tr><td>' + (i+1) + '</td><td style="font-family:monospace">' + ip + '</td><td><button class="btn danger-btn btn-icon" onclick="removePoolIp(\'' + ip.replace(/'/g, "\\'") + '\')">X</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('ippool-list').innerHTML = html;
+}
+
+function enterPoolEditMode() {
+    var data = allIpPoolData[currentIspTab] || [];
+    document.getElementById('pool-edit-textarea').value = data.join('\n');
+    document.getElementById('pool-edit-textarea').style.display = 'block';
+    document.getElementById('save-pool-edit-btn').style.display = 'inline-block';
+    document.getElementById('cancel-pool-edit-btn').style.display = 'inline-block';
+    document.getElementById('ippool-list').style.display = 'none';
+}
+
+function cancelPoolEditMode() {
+    document.getElementById('pool-edit-textarea').style.display = 'none';
+    document.getElementById('save-pool-edit-btn').style.display = 'none';
+    document.getElementById('cancel-pool-edit-btn').style.display = 'none';
+    document.getElementById('ippool-list').style.display = 'block';
+}
+
+function savePoolEditMode() {
+    var raw = document.getElementById('pool-edit-textarea').value.trim();
+    var ips = raw ? raw.split(/[\n,;\s]+/).filter(Boolean) : [];
+    api('/api/ippool/replace', 'POST', { isp: currentIspTab, ips: ips }).then(function(r) {
+        if (r.success) {
+            toast('当前池已保存');
+            cancelPoolEditMode();
+            loadIpPool();
+        } else {
+            toast(r.message || '保存失败', false);
+        }
+    });
+}
+
+function removePoolIp(ip) {
+    var data = (allIpPoolData[currentIspTab] || []).filter(function(x) { return x !== ip; });
+    api('/api/ippool/replace', 'POST', { isp: currentIspTab, ips: data }).then(function(r) {
+        if (r.success) {
+            toast('IP 已删除');
+            loadIpPool();
+        } else {
+            toast(r.message || '删除失败', false);
+        }
+    });
+}
+
+// ========== Source rows ==========
+
+function renderSourcesList() {
+    var listDiv = document.getElementById('sources-list');
+    listDiv.innerHTML = '';
+    var sources = [];
+    if (serverConfigData && serverConfigData.ipSources && serverConfigData.ipSources[currentIspTab] && serverConfigData.ipSources[currentIspTab].fetchSources) {
+        sources = serverConfigData.ipSources[currentIspTab].fetchSources;
+    }
+    if (sources.length === 0) {
+        addSourceRowToDOM(0, '');
+    } else {
+        sources.forEach(function(src) {
+            addSourceRowToDOM(src.type, src.value || '');
+        });
+    }
+}
+
+function addSourceRow() {
+    addSourceRowToDOM(0, '');
+}
+
+function addSourceRowToDOM(type, value) {
+    var listDiv = document.getElementById('sources-list');
+    var rowId = 'src_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+
+    var wrapper = document.createElement('div');
+    wrapper.id = rowId;
+    wrapper.style.marginBottom = '4px';
+
+    var row = document.createElement('div');
+    row.className = 'source-row';
+
+    var sel = document.createElement('select');
+    sel.className = 'source-type';
+    sel.innerHTML = '<option value="0"' + (type === 0 ? ' selected' : '') + '>HTTP API</option>' +
+                    '<option value="1"' + (type === 1 ? ' selected' : '') + '>DoH CNAME</option>';
+
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'source-value';
+    inp.value = value;
+    inp.placeholder = '输入 URL 或域名...';
+
+    var btnPreview = document.createElement('button');
+    btnPreview.className = 'btn btn-secondary btn-icon';
+    btnPreview.title = '预览拉取';
+    btnPreview.textContent = '\u25B6';
+    btnPreview.onclick = function() { previewSource(rowId); };
+
+    var btnDel = document.createElement('button');
+    btnDel.className = 'btn btn-secondary btn-icon';
+    btnDel.style.color = 'var(--red)';
+    btnDel.style.borderColor = 'var(--red)';
+    btnDel.title = '删除';
+    btnDel.textContent = '\u00D7';
+    btnDel.onclick = function() { wrapper.remove(); };
+
+    row.appendChild(sel);
+    row.appendChild(inp);
+    row.appendChild(btnPreview);
+    row.appendChild(btnDel);
+
+    var preview = document.createElement('div');
+    preview.className = 'preview-box';
+    preview.id = rowId + '_preview';
+
+    wrapper.appendChild(row);
+    wrapper.appendChild(preview);
+    listDiv.appendChild(wrapper);
+}
+
+function previewSource(rowId) {
+    var wrapper = document.getElementById(rowId);
+    var type = parseInt(wrapper.querySelector('.source-type').value);
+    var value = wrapper.querySelector('.source-value').value.trim();
+    var box = document.getElementById(rowId + '_preview');
+
+    if (!value) {
+        toast('请先输入地址或域名', false);
+        return;
+    }
+
+    box.style.display = 'block';
+    box.style.color = 'var(--text2)';
+    box.textContent = '正在拉取...';
+
+    api('/api/ippool/preview', 'POST', { type: type, value: value }).then(function(r) {
+        if (r.success) {
+            var ips = r.data || [];
+            if (ips.length === 0) {
+                box.style.color = 'var(--accent)';
+                box.textContent = '请求成功，但未解析到任何 IP';
+            } else {
+                box.style.color = 'var(--green)';
+                box.textContent = '获取到 ' + ips.length + ' 个 IP:\n' + ips.join(', ');
+            }
+        } else {
+            box.style.color = 'var(--red)';
+            box.textContent = '失败: ' + (r.message || 'Error');
+        }
+    }).catch(function(err) {
+        box.style.color = 'var(--red)';
+        box.textContent = '网络错误: ' + err.message;
+    });
+}
+
+function savePoolSources() {
+    if (!serverConfigData) return;
+    if (!serverConfigData.ipSources) serverConfigData.ipSources = {};
+    if (!serverConfigData.ipSources[currentIspTab]) serverConfigData.ipSources[currentIspTab] = { manualIps: [], fetchSources: [] };
+
+    var newSources = [];
+    var rows = document.querySelectorAll('#sources-list > div');
+    rows.forEach(function(wrapper) {
+        var typeEl = wrapper.querySelector('.source-type');
+        var valEl = wrapper.querySelector('.source-value');
+        if (typeEl && valEl) {
+            var v = valEl.value.trim();
+            if (v) {
+                newSources.push({ type: parseInt(typeEl.value), value: v });
+            }
+        }
+    });
+    serverConfigData.ipSources[currentIspTab].fetchSources = newSources;
+
+    api('/api/config', 'POST', serverConfigData).then(function(r) {
+        if (r.success) toast(ISP_NAMES[currentIspTab] + ' 拉取配置已保存');
+        else toast(r.message || '保存失败', false);
+    });
+}
+
+function addIps() {
+    var raw = document.getElementById('add-ips-input').value.trim();
+    if (!raw) return;
+    var ips = raw.split(/[\n,;\s]+/).filter(Boolean);
+    api('/api/ippool/add', 'POST', { isp: currentIspTab, ips: ips }).then(function(r) {
+        if (r.success) {
+            toast('IP 添加成功');
+            document.getElementById('add-ips-input').value = '';
+            loadIpPool();
+        } else {
+            toast(r.message || '添加失败', false);
+        }
+    });
+}
+
+function refreshCurrentPool() {
+    api('/api/ippool/refresh?isp=' + currentIspTab, 'POST').then(function(r) {
+        if (r.success) {
+            toast(ISP_NAMES[currentIspTab] + ' 拉取成功');
+            loadIpPool();
+        } else {
+            toast(r.message || '拉取失败', false);
+        }
+    });
+}
+
+function refreshAllPools() {
+    api('/api/ippool/refresh', 'POST').then(function(r) {
+        if (r.success) {
+            toast('所有池子拉取触发成功');
+            loadIpPool();
+        } else {
+            toast(r.message || '拉取失败', false);
+        }
+    });
+}
+
+// ========== Settings ==========
+
+function loadConfig() {
+    return api('/api/config').then(function(r) {
+        if (!r.success) return;
+        var c = r.data;
+        serverConfigData = c;
+
+        document.getElementById('cfg-testurl').value = c.testUrl || '';
+        document.getElementById('cfg-testhost').value = c.testHost || '';
+        document.getElementById('cfg-testport').value = c.testPort || 443;
+        document.getElementById('cfg-batchsize').value = c.batchSize || 20;
+        document.getElementById('cfg-downloaddur').value = c.downloadDurationSeconds || 10;
+        document.getElementById('cfg-tcpdur').value = c.tcpTestDurationSeconds || 10;
+        document.getElementById('cfg-topn').value = c.topN || 5;
+        document.getElementById('cfg-client-interval').value = c.clientIntervalMinutes || 60;
+        document.getElementById('cfg-apiinterval').value = c.apiRefreshIntervalMinutes || 60;
+    });
+}
+
+function saveConfig(e) {
+    e.preventDefault();
+    if (!serverConfigData) return;
+
+    serverConfigData.testUrl = document.getElementById('cfg-testurl').value;
+    serverConfigData.testHost = document.getElementById('cfg-testhost').value;
+    serverConfigData.testPort = parseInt(document.getElementById('cfg-testport').value) || 443;
+    serverConfigData.batchSize = parseInt(document.getElementById('cfg-batchsize').value) || 20;
+    serverConfigData.downloadDurationSeconds = parseInt(document.getElementById('cfg-downloaddur').value) || 10;
+    serverConfigData.tcpTestDurationSeconds = parseInt(document.getElementById('cfg-tcpdur').value) || 10;
+    serverConfigData.topN = parseInt(document.getElementById('cfg-topn').value) || 5;
+    serverConfigData.clientIntervalMinutes = parseInt(document.getElementById('cfg-client-interval').value) || 60;
+    serverConfigData.apiRefreshIntervalMinutes = parseInt(document.getElementById('cfg-apiinterval').value) || 60;
+
+    api('/api/config', 'POST', serverConfigData).then(function(r) {
+        if (r.success) toast('全局配置已保存');
+        else toast(r.message || '保存失败', false);
+    });
+}
+
+// ========== DNS Update ==========
+
+var currentDnsIspTab = 'Telecom';
+
+function switchDnsIspTab(e, isp) {
+    currentDnsIspTab = isp;
+    document.querySelectorAll('.dns-isp-tab').forEach(function(t) { t.classList.remove('active'); });
+    e.target.classList.add('active');
+    document.querySelectorAll('.dns-isp-label').forEach(function(el) { el.textContent = ISP_NAMES[isp]; });
+    fillDnsRecordFields();
+}
+
+function loadDnsPanel() {
+    var p1 = serverConfigData ? Promise.resolve() : loadConfig();
+    p1.then(function() {
+        fillDnsGlobalFields();
+        fillDnsRecordFields();
+        loadDnsStatus();
+    });
+}
+
+function fillDnsGlobalFields() {
+    if (!serverConfigData) return;
+    var hw = serverConfigData.huaweiDns || {};
+    document.getElementById('hw-enabled').value = hw.enabled ? 'true' : 'false';
+    document.getElementById('hw-interval').value = hw.updateIntervalMinutes != null ? hw.updateIntervalMinutes : 30;
+    document.getElementById('hw-iam-user').value = hw.iamUser || '';
+    document.getElementById('hw-iam-password').value = hw.iamPassword || '';
+    document.getElementById('hw-iam-domain').value = hw.iamDomainName || '';
+    document.getElementById('hw-project-id').value = hw.projectId || '';
+    document.getElementById('hw-endpoint').value = hw.endpoint || 'https://dns.cn-north-4.myhuaweicloud.com';
+    document.getElementById('hw-iam-endpoint').value = hw.iamEndpoint || 'https://iam.cn-north-4.myhuaweicloud.com';
+}
+
+function fillDnsRecordFields() {
+    if (!serverConfigData) return;
+    var hw = serverConfigData.huaweiDns || {};
+    var records = hw.records || {};
+    var rec = records[currentDnsIspTab] || {};
+    document.getElementById('hw-zone-id').value = rec.zoneId || '';
+    document.getElementById('hw-recordset-id').value = rec.recordSetId || '';
+    document.getElementById('hw-domain').value = rec.domain || '';
+    document.getElementById('hw-ttl').value = rec.ttl || 60;
+}
+
+function saveHuaweiDnsConfig() {
+    if (!serverConfigData) return;
+    var hw = serverConfigData.huaweiDns || {};
+    hw.enabled = document.getElementById('hw-enabled').value === 'true';
+    hw.updateIntervalMinutes = parseInt(document.getElementById('hw-interval').value) || 0;
+    hw.iamUser = document.getElementById('hw-iam-user').value;
+    var pwd = document.getElementById('hw-iam-password').value;
+    if (pwd) hw.iamPassword = pwd;
+    hw.iamDomainName = document.getElementById('hw-iam-domain').value;
+    hw.projectId = document.getElementById('hw-project-id').value;
+    hw.endpoint = document.getElementById('hw-endpoint').value;
+    hw.iamEndpoint = document.getElementById('hw-iam-endpoint').value;
+    
+    serverConfigData.huaweiDns = hw;
+    api('/api/config', 'POST', serverConfigData).then(function(r) {
+        if (r.success) toast('华为云凭证配置已保存');
+        else toast(r.message || '保存失败', false);
+    });
+}
+
+function testHuaweiConnection() {
+    toast('正在测试连接，请稍候...');
+    api('/api/dns/test-auth', 'POST', {}).then(function(r) {
+        if (r.success) {
+            toast('✅ 连接成功！IAM 认证通过。');
+        } else {
+            toast('❌ 连接失败: ' + (r.message || '未知错误'), false);
+        }
+    });
+}
+
+function saveHuaweiDnsRecordConfig() {
+    if (!serverConfigData) return;
+    if (!serverConfigData.huaweiDns) serverConfigData.huaweiDns = {};
+    if (!serverConfigData.huaweiDns.records) serverConfigData.huaweiDns.records = {};
+    if (!serverConfigData.huaweiDns.records[currentDnsIspTab]) serverConfigData.huaweiDns.records[currentDnsIspTab] = {};
+
+    var rec = serverConfigData.huaweiDns.records[currentDnsIspTab];
+    rec.zoneId = document.getElementById('hw-zone-id').value;
+    rec.recordSetId = document.getElementById('hw-recordset-id').value;
+    rec.domain = document.getElementById('hw-domain').value;
+    rec.ttl = parseInt(document.getElementById('hw-ttl').value) || 60;
+
+    api('/api/config', 'POST', serverConfigData).then(function(r) {
+        if (r.success) toast(ISP_NAMES[currentDnsIspTab] + ' 记录配置已保存');
+        else toast(r.message || '保存失败', false);
+    });
+}
+
+function triggerDnsUpdate(isp) {
+    var body = isp ? { isp: isp } : {};
+    var label = isp ? ISP_NAMES[isp] : '所有运营商';
+    toast('正在触发 ' + label + ' DNS 更新...');
+    api('/api/dns/update', 'POST', body).then(function(r) {
+        if (r.success) {
+            renderDnsStatus(r.data || []);
+            var allOk = (r.data || []).every(function(s) { return s.success; });
+            if (allOk) toast(label + ' DNS 更新成功');
+            else toast(label + ' DNS 更新部分失败，请查看状态', false);
+        } else {
+            toast(r.message || 'DNS 更新失败', false);
+        }
+    }).catch(function(err) {
+        toast('网络错误: ' + err.message, false);
+    });
+}
+
+function loadDnsStatus() {
+    api('/api/dns/status').then(function(r) {
+        if (r.success) {
+            renderDnsStatus(r.data || []);
+        }
+    });
+}
+
+function renderDnsStatus(statusList) {
+    if (!statusList || statusList.length === 0) {
+        document.getElementById('dns-status-list').innerHTML = '<div class="empty-state">暂无更新记录</div>';
+        return;
+    }
+    var html = '';
+    statusList.forEach(function(s) {
+        var badge = s.success ? '<span class="badge badge-online">成功</span>' : '<span class="badge badge-offline">失败/未执行</span>';
+        var ispBadge = '<span class="badge ' + (ISP_CLASSES[s.isp] || '') + '">' + (ISP_NAMES[s.isp] || s.isp) + '</span>';
+        html += '<div style="margin-bottom:18px;border:1px solid var(--border);border-radius:8px;padding:14px;">';
+        html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">';
+        html += ispBadge + ' <strong>' + (s.domain || '-') + '</strong> ' + badge;
+        html += '<span style="font-size:12px;color:var(--text2);margin-left:auto;">' + fmtTime(s.lastUpdatedAt) + '</span>';
+        html += '</div>';
+        if (s.message) {
+            html += '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">' + s.message + '</div>';
+        }
+        var results = s.results || [];
+        if (results.length > 0) {
+            html += '<table style="margin:0;"><thead><tr>' +
+                '<th>IP 地址</th><th>延迟 (ms)</th><th>丢包率</th><th>下载速度</th><th>综合评分</th>' +
+                '</tr></thead><tbody>';
+            results.forEach(function(r) {
+                var lossColor = r.lossRate > 0.1 ? 'color:#e74c3c;' : (r.lossRate > 0 ? 'color:#f39c12;' : 'color:#27ae60;');
+                var speedStr = r.downloadSpeedKBps >= 1024
+                    ? (r.downloadSpeedKBps / 1024).toFixed(2) + ' MB/s'
+                    : r.downloadSpeedKBps.toFixed(1) + ' KB/s';
+                html += '<tr>' +
+                    '<td style="font-family:monospace;">' + r.ipAddress + '</td>' +
+                    '<td>' + r.latencyMs.toFixed(1) + '</td>' +
+                    '<td style="' + lossColor + '">' + (r.lossRate * 100).toFixed(1) + '%</td>' +
+                    '<td>' + speedStr + '</td>' +
+                    '<td>' + r.score.toFixed(2) + '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody></table>';
+        } else {
+            html += '<div style="font-size:13px;color:var(--text2);">暂无 IP 数据</div>';
+        }
+        html += '</div>';
+    });
+    document.getElementById('dns-status-list').innerHTML = html;
+}
+
+// ========== Init ==========
+loadDashboard();
+</script>
+</body>
+</html>

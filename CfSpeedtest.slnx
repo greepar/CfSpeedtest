@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CfSpeedtest.Client/CfSpeedtest.Client.csproj" />
+    <Project Path="src/CfSpeedtest.Server/CfSpeedtest.Server.csproj" />
+    <Project Path="src/CfSpeedtest.Shared/CfSpeedtest.Shared.csproj" />
+  </Folder>
+</Solution>

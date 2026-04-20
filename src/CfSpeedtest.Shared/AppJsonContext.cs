@@ -1,0 +1,43 @@
+using System.Text.Json.Serialization;
+
+namespace CfSpeedtest.Shared;
+
+[JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(SpeedTestTask))]
+[JsonSerializable(typeof(SpeedTestReport))]
+[JsonSerializable(typeof(ClientRegisterRequest))]
+[JsonSerializable(typeof(ClientRegisterResponse))]
+[JsonSerializable(typeof(IpTestResult))]
+[JsonSerializable(typeof(ClientInfo))]
+[JsonSerializable(typeof(IpSourceConfig))]
+[JsonSerializable(typeof(Dictionary<string, IpSourceConfig>))]
+[JsonSerializable(typeof(IpPoolAddRequest))]
+[JsonSerializable(typeof(IpPoolReplaceRequest))]
+[JsonSerializable(typeof(FetchSource))]
+[JsonSerializable(typeof(List<FetchSource>))]
+[JsonSerializable(typeof(ServerConfig))]
+[JsonSerializable(typeof(DohResponse))]
+[JsonSerializable(typeof(DohAnswer))]
+[JsonSerializable(typeof(TestHistory))]
+[JsonSerializable(typeof(HuaweiDnsConfig))]
+[JsonSerializable(typeof(HuaweiDnsRecordConfig))]
+[JsonSerializable(typeof(Dictionary<string, HuaweiDnsRecordConfig>))]
+[JsonSerializable(typeof(DnsUpdateTriggerRequest))]
+[JsonSerializable(typeof(DnsUpdateStatus))]
+[JsonSerializable(typeof(List<DnsUpdateStatus>))]
+[JsonSerializable(typeof(ApiResponse<List<DnsUpdateStatus>>))]
+[JsonSerializable(typeof(ApiResponse<SpeedTestTask>))]
+[JsonSerializable(typeof(ApiResponse<ClientRegisterResponse>))]
+[JsonSerializable(typeof(ApiResponse<string>))]
+[JsonSerializable(typeof(ApiResponse<List<TestHistory>>))]
+[JsonSerializable(typeof(ApiResponse<List<ClientInfo>>))]
+[JsonSerializable(typeof(ApiResponse<ServerConfig>))]
+[JsonSerializable(typeof(ApiResponse<List<string>>))]
+[JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(List<IpTestResult>))]
+[JsonSerializable(typeof(List<TestHistory>))]
+[JsonSerializable(typeof(List<ClientInfo>))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
+public partial class AppJsonContext : JsonSerializerContext
+{
+}
