@@ -162,6 +162,20 @@ public class ClientHeartbeatResponse
     public bool ForceCheckUpdate { get; set; }
 }
 
+public class ClientWsMessage
+{
+    public string Type { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public IspType Isp { get; set; }
+    public string? Name { get; set; }
+    public string? Version { get; set; }
+    public string? Platform { get; set; }
+    public int HeartbeatIntervalSeconds { get; set; }
+    public bool ForceFetchTask { get; set; }
+    public bool ForceCheckUpdate { get; set; }
+    public string? Message { get; set; }
+}
+
 /// <summary>
 /// 服务端预留白名单客户端 ID 的请求
 /// </summary>

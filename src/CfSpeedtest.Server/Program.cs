@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Net.WebSockets;
 using CfSpeedtest.Server.Services;
 using CfSpeedtest.Shared;
 using Microsoft.AspNetCore.Http.Json;
@@ -20,10 +21,12 @@ builder.Services.AddSingleton<DnsUpdateService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DnsUpdateService>());
 builder.Services.AddSingleton<RoundCoordinatorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundCoordinatorService>());
+builder.Services.AddSingleton<ClientWsHub>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
 
+app.UseWebSockets();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseStaticFiles(new StaticFileOptions
@@ -121,6 +124,84 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
     });
 });
 
+app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoordinatorService rounds, ClientWsHub hub) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var clientId = context.Request.Query["clientId"].ToString();
+    var ispText = context.Request.Query["isp"].ToString();
+    if (string.IsNullOrWhiteSpace(clientId) || !Enum.TryParse<IspType>(ispText, out var isp))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var client = store.GetClient(clientId);
+    if (client is null || !client.Allowed)
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    hub.SetConnection(clientId, socket);
+
+    var hello = new ClientWsMessage
+    {
+        Type = "hello",
+        ClientId = clientId,
+        HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
+        Message = "ws connected"
+    };
+    await hub.SendAsync(clientId, hello, context.RequestAborted);
+
+    var buffer = new byte[8192];
+    try
+    {
+        while (socket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
+        {
+            var result = await socket.ReceiveAsync(buffer, context.RequestAborted);
+            if (result.MessageType == WebSocketMessageType.Close)
+                break;
+
+            var json = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+            var msg = JsonSerializer.Deserialize(json, AppJsonContext.Default.ClientWsMessage);
+            if (msg is null) continue;
+
+            client = store.GetClient(clientId) ?? client;
+            client.Isp = isp;
+            client.Name = string.IsNullOrWhiteSpace(msg.Name) ? client.Name : msg.Name;
+            client.Version = string.IsNullOrWhiteSpace(msg.Version) ? client.Version : msg.Version;
+            client.Platform = string.IsNullOrWhiteSpace(msg.Platform) ? client.Platform : msg.Platform;
+            client.LastSeenAt = DateTime.UtcNow;
+            client.IsOnline = true;
+            store.UpsertClient(client);
+
+            var response = new ClientWsMessage
+            {
+                Type = "heartbeat-ack",
+                ClientId = clientId,
+                HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
+                ForceFetchTask = rounds.ConsumeImmediateTrigger(isp),
+                ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(clientId),
+            };
+            await hub.SendAsync(clientId, response, context.RequestAborted);
+        }
+    }
+    finally
+    {
+        hub.RemoveConnection(clientId, socket);
+        if (socket.State == WebSocketState.Open)
+        {
+            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", CancellationToken.None);
+        }
+    }
+});
+
 // ============================================================
 //  API: 客户端检查更新
 // ============================================================
@@ -162,7 +243,7 @@ app.MapGet("/api/client/update", (HttpContext http, DataStore store, string vers
     }
 
     var hasUpdate = IsVersionNewer(latestVersion, currentVersion);
-    var fileName = GetClientUpdateFileName(clientPlatform, latestVersion);
+    var fileName = GetClientUpdateFileName(clientPlatform);
     string? downloadUrl = null;
 
     if (sourceType == "local")
@@ -221,7 +302,7 @@ app.MapGet("/api/client/update", (HttpContext http, DataStore store, string vers
 app.MapGet("/api/client/update/overview", (DataStore store) =>
 {
     var config = store.GetConfig();
-    var platforms = new[] { "win-x64", "linux-x64", "linux-musl-x64" };
+    var platforms = new[] { "win-x86", "win-x64", "win-arm64", "linux-x64", "linux-musl-x64", "linux-arm64", "linux-musl-arm64", "linux-arm", "osx-x64", "osx-arm64" };
     var packages = new List<ClientUpdatePackageStatus>();
     var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
     var repository = config.ClientUpdateRepository.Trim();
@@ -230,7 +311,7 @@ app.MapGet("/api/client/update/overview", (DataStore store) =>
 
     foreach (var platform in platforms)
     {
-        var fileName = GetClientUpdateFileName(platform, config.LatestClientVersion);
+        var fileName = GetClientUpdateFileName(platform);
         string downloadUrl;
         if (sourceType == "local")
         {
@@ -591,9 +672,10 @@ static bool IsVersionNewer(string latestVersion, string currentVersion)
     return !string.Equals(latestVersion, currentVersion, StringComparison.OrdinalIgnoreCase);
 }
 
-static string GetClientUpdateFileName(string platform, string version)
+static string GetClientUpdateFileName(string platform)
 {
-    return $"CfSpeedtest.Client-{platform}-{version}.zip";
+    var archiveExt = platform.StartsWith("win-", StringComparison.OrdinalIgnoreCase) ? "zip" : "tar.xz";
+    return $"cfspeedtest-client-{platform}.{archiveExt}";
 }
 
 static string CombineProxyUrl(string proxyPrefix, string rawUrl)

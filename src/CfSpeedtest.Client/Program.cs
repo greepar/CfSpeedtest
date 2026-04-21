@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Net.WebSockets;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -105,8 +106,7 @@ catch (Exception ex)
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
-using var immediateUpdateSignal = new SemaphoreSlim(0, 1);
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, immediateUpdateSignal, heartbeatCts.Token);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, autoUpdate, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -116,7 +116,6 @@ while (true)
 
     try
     {
-        await ConsumeManualUpdateSignalAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient, immediateUpdateSignal);
         var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, isp, httpClient, intervalMinutes);
 
         if (oneshot) break;
@@ -318,14 +317,30 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
 static string DetectClientPlatform()
 {
     if (OperatingSystem.IsWindows())
-        return "win-x64";
+    {
+        return RuntimeInformation.OSArchitecture switch
+        {
+            Architecture.X86 => "win-x86",
+            Architecture.Arm64 => "win-arm64",
+            _ => "win-x64",
+        };
+    }
 
     if (OperatingSystem.IsLinux())
     {
         var rid = RuntimeInformation.RuntimeIdentifier;
-        return rid.Contains("musl", StringComparison.OrdinalIgnoreCase)
-            ? "linux-musl-x64"
-            : "linux-x64";
+        var isMusl = rid.Contains("musl", StringComparison.OrdinalIgnoreCase);
+        return RuntimeInformation.OSArchitecture switch
+        {
+            Architecture.Arm64 => isMusl ? "linux-musl-arm64" : "linux-arm64",
+            Architecture.Arm => "linux-arm",
+            _ => isMusl ? "linux-musl-x64" : "linux-x64",
+        };
+    }
+
+    if (OperatingSystem.IsMacOS())
+    {
+        return RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "osx-arm64" : "osx-x64";
     }
 
     return "win-x64";
@@ -377,14 +392,18 @@ static Task StartHeartbeatLoopAsync(
     string clientName,
     string currentVersion,
     string clientPlatform,
+    bool autoUpdate,
     HttpClient httpClient,
     int heartbeatIntervalSeconds,
     SemaphoreSlim immediateFetchSignal,
-    SemaphoreSlim immediateUpdateSignal,
     CancellationToken cancellationToken)
 {
     return Task.Run(async () =>
     {
+        var wsOk = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
+        if (wsOk)
+            return;
+
         var intervalSeconds = Math.Max(5, heartbeatIntervalSeconds);
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(intervalSeconds));
 
@@ -415,9 +434,10 @@ static Task StartHeartbeatLoopAsync(
                     {
                         immediateFetchSignal.Release();
                     }
-                    if (result.Data.ForceCheckUpdate && immediateUpdateSignal.CurrentCount == 0)
+                    if (result.Data.ForceCheckUpdate)
                     {
-                        immediateUpdateSignal.Release();
+                        Console.WriteLine("Manual update trigger received. Checking update immediately...");
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient);
                     }
 
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
@@ -440,25 +460,85 @@ static Task StartHeartbeatLoopAsync(
 
         if (!cancellationToken.IsCancellationRequested)
         {
-            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, intervalSeconds, immediateFetchSignal, immediateUpdateSignal, cancellationToken);
+            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, autoUpdate, httpClient, intervalSeconds, immediateFetchSignal, cancellationToken);
         }
     }, cancellationToken);
 }
 
-static async Task ConsumeManualUpdateSignalAsync(
+static async Task<bool> TryStartWebSocketHeartbeatAsync(
     string serverUrl,
+    string clientId,
+    IspType isp,
+    string clientName,
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
-    HttpClient httpClient,
-    SemaphoreSlim immediateUpdateSignal)
+    SemaphoreSlim immediateFetchSignal,
+    CancellationToken cancellationToken)
 {
-    if (immediateUpdateSignal.CurrentCount == 0)
-        return;
+    try
+    {
+        using var ws = new ClientWebSocket();
+        var wsUrl = BuildWebSocketUrl(serverUrl, clientId, isp);
+        await ws.ConnectAsync(new Uri(wsUrl), cancellationToken);
+        Console.WriteLine("WebSocket heartbeat connected.");
 
-    await immediateUpdateSignal.WaitAsync();
-    Console.WriteLine("Manual update trigger received. Checking update immediately...");
-    await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient);
+        var intervalSeconds = 30;
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(intervalSeconds));
+        var receiveBuffer = new byte[8192];
+
+        while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
+        {
+            var heartbeat = new ClientWsMessage
+            {
+                Type = "heartbeat",
+                ClientId = clientId,
+                Isp = isp,
+                Name = clientName,
+                Version = currentVersion,
+                Platform = clientPlatform,
+            };
+            var json = JsonSerializer.Serialize(heartbeat, AppJsonContext.Default.ClientWsMessage);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
+
+            var result = await ws.ReceiveAsync(receiveBuffer, cancellationToken);
+            if (result.MessageType == WebSocketMessageType.Close)
+                break;
+
+            var body = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
+            var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
+            if (msg is not null)
+            {
+                intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
+                if (msg.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
+                    immediateFetchSignal.Release();
+                if (msg.ForceCheckUpdate)
+                {
+                    Console.WriteLine("Manual update trigger received via WebSocket. Checking update immediately...");
+                    await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+                }
+            }
+
+            if (!await timer.WaitForNextTickAsync(cancellationToken))
+                break;
+        }
+
+        Console.WriteLine("WebSocket heartbeat disconnected. Falling back to HTTP heartbeat.");
+        return false;
+    }
+    catch
+    {
+        Console.WriteLine("WebSocket heartbeat unavailable. Falling back to HTTP heartbeat.");
+        return false;
+    }
+}
+
+static string BuildWebSocketUrl(string serverUrl, string clientId, IspType isp)
+{
+    var baseUri = new Uri(serverUrl);
+    var scheme = baseUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
+    return $"{scheme}://{baseUri.Authority}/api/client/ws?clientId={Uri.EscapeDataString(clientId)}&isp={Uri.EscapeDataString(isp.ToString())}";
 }
 
 static async Task WaitForNextCheckAsync(TimeSpan delay, SemaphoreSlim immediateFetchSignal)
