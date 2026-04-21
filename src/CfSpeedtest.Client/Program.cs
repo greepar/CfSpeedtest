@@ -15,11 +15,11 @@ Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
 Console.WriteLine();
 
 // 读取配置
-var serverUrl = GetArg(args, "--server", "http://127.0.0.1:5000");
-var ispStr = GetArg(args, "--isp", "Telecom");
-var clientName = GetArg(args, "--name", Environment.MachineName);
-var intervalStr = GetArg(args, "--interval", "60"); // 默认60分钟
-var oneshot = HasFlag(args, "--once");
+var serverUrl = GetArg(args, "server", "http://127.0.0.1:5000");
+var ispStr = GetArg(args, "isp", "Telecom");
+var clientName = GetArg(args, "name", Environment.MachineName);
+var intervalStr = GetArg(args, "interval", "60"); // 默认60分钟
+var oneshot = HasFlag(args, "once");
 
 if (!Enum.TryParse<IspType>(ispStr, true, out var isp))
 {
@@ -35,6 +35,12 @@ Console.WriteLine($"Default interval: {intervalMinutes}min");
 Console.WriteLine();
 
 using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+var stateFile = Path.Combine(AppContext.BaseDirectory, "client-state.json");
+var localState = LoadClientState(stateFile);
+if (!string.IsNullOrWhiteSpace(localState.ClientId))
+{
+    Console.WriteLine($"Local clientId: {localState.ClientId}");
+}
 
 // NativeAOT-safe JSON options using source generators
 var jsonOpts = new JsonSerializerOptions
@@ -46,9 +52,10 @@ var jsonOpts = new JsonSerializerOptions
 // ===== 注册客户端 =====
 Console.WriteLine("[1] Registering with server...");
 string clientId;
+int heartbeatIntervalSeconds = 30;
 try
 {
-    var regReq = new ClientRegisterRequest { Isp = isp, Name = clientName };
+    var regReq = new ClientRegisterRequest { ClientId = localState.ClientId, Isp = isp, Name = clientName };
     var regJson = JsonSerializer.Serialize(regReq, AppJsonContext.Default.ClientRegisterRequest);
     var regResp = await httpClient.PostAsync(
         $"{serverUrl}/api/client/register",
@@ -62,6 +69,11 @@ try
         return 1;
     }
     clientId = regResult.Data.ClientId;
+    heartbeatIntervalSeconds = regResult.Data.HeartbeatIntervalSeconds > 0
+        ? regResult.Data.HeartbeatIntervalSeconds
+        : heartbeatIntervalSeconds;
+    localState.ClientId = clientId;
+    SaveClientState(stateFile, localState);
     Console.WriteLine($"Registered as: {clientId}");
 }
 catch (Exception ex)
@@ -69,6 +81,9 @@ catch (Exception ex)
     Console.WriteLine($"Failed to register: {ex.Message}");
     return 1;
 }
+
+using var heartbeatCts = new CancellationTokenSource();
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, httpClient, heartbeatIntervalSeconds, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -100,6 +115,8 @@ while (true)
     await Task.Delay(TimeSpan.FromMinutes(intervalMinutes));
 }
 
+heartbeatCts.Cancel();
+try { await heartbeatTask; } catch { }
 return 0;
 
 // ============================================================
@@ -208,6 +225,66 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
     Console.WriteLine("OK");
 
     return 0;
+}
+
+static Task StartHeartbeatLoopAsync(
+    string serverUrl,
+    string clientId,
+    IspType isp,
+    string clientName,
+    HttpClient httpClient,
+    int heartbeatIntervalSeconds,
+    CancellationToken cancellationToken)
+{
+    return Task.Run(async () =>
+    {
+        var intervalSeconds = Math.Max(5, heartbeatIntervalSeconds);
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(intervalSeconds));
+
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            try
+            {
+                var req = new ClientHeartbeatRequest
+                {
+                    ClientId = clientId,
+                    Isp = isp,
+                    Name = clientName,
+                };
+                var json = JsonSerializer.Serialize(req, AppJsonContext.Default.ClientHeartbeatRequest);
+                var resp = await httpClient.PostAsync(
+                    $"{serverUrl}/api/client/heartbeat",
+                    new StringContent(json, Encoding.UTF8, "application/json"),
+                    cancellationToken);
+                resp.EnsureSuccessStatusCode();
+
+                var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+                var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
+                if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
+                {
+                    var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
+                    if (nextIntervalSeconds != intervalSeconds)
+                    {
+                        intervalSeconds = nextIntervalSeconds;
+                        break;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // 心跳失败不打断主测速流程
+            }
+        }
+
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, httpClient, intervalSeconds, cancellationToken);
+        }
+    }, cancellationToken);
 }
 
 // ============================================================
@@ -343,9 +420,10 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
 // ============================================================
 static string GetArg(string[] args, string key, string defaultValue)
 {
+    var normalizedKey = NormalizeArgKey(key);
     for (int i = 0; i < args.Length - 1; i++)
     {
-        if (args[i].Equals(key, StringComparison.OrdinalIgnoreCase))
+        if (NormalizeArgKey(args[i]).Equals(normalizedKey, StringComparison.OrdinalIgnoreCase))
             return args[i + 1];
     }
     return defaultValue;
@@ -353,10 +431,43 @@ static string GetArg(string[] args, string key, string defaultValue)
 
 static bool HasFlag(string[] args, string flag)
 {
+    var normalizedFlag = NormalizeArgKey(flag);
     for (int i = 0; i < args.Length; i++)
     {
-        if (args[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
+        if (NormalizeArgKey(args[i]).Equals(normalizedFlag, StringComparison.OrdinalIgnoreCase))
             return true;
     }
     return false;
+}
+
+static string NormalizeArgKey(string value)
+{
+    return value.Trim().TrimStart('-').TrimStart('-');
+}
+
+static ClientLocalState LoadClientState(string path)
+{
+    try
+    {
+        if (!File.Exists(path)) return new ClientLocalState();
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize(json, AppJsonContext.Default.ClientLocalState) ?? new ClientLocalState();
+    }
+    catch
+    {
+        return new ClientLocalState();
+    }
+}
+
+static void SaveClientState(string path, ClientLocalState state)
+{
+    try
+    {
+        var json = JsonSerializer.Serialize(state, AppJsonContext.Default.ClientLocalState);
+        File.WriteAllText(path, json);
+    }
+    catch
+    {
+        // 忽略本地持久化失败
+    }
 }

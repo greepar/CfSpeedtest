@@ -123,6 +123,35 @@ public class ClientRegisterResponse
     public string ClientId { get; set; } = string.Empty;
     public bool Success { get; set; }
     public string? Message { get; set; }
+    public int HeartbeatIntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// 客户端心跳请求
+/// </summary>
+public class ClientHeartbeatRequest
+{
+    public string ClientId { get; set; } = string.Empty;
+    public IspType Isp { get; set; }
+    public string? Name { get; set; }
+}
+
+/// <summary>
+/// 客户端心跳响应
+/// </summary>
+public class ClientHeartbeatResponse
+{
+    public bool Success { get; set; }
+    public string? Message { get; set; }
+    public int HeartbeatIntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// 客户端本地持久化状态
+/// </summary>
+public class ClientLocalState
+{
+    public string ClientId { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -136,6 +165,7 @@ public class ClientInfo
     public DateTime RegisteredAt { get; set; } = DateTime.UtcNow;
     public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
     public bool IsOnline { get; set; }
+    public bool Allowed { get; set; } = true;
 }
 
 public enum FetchSourceType
@@ -236,6 +266,9 @@ public class ServerConfig
 
     /// <summary>客户端轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;
+
+    /// <summary>客户端心跳间隔(秒)</summary>
+    public int HeartbeatIntervalSeconds { get; set; } = 30;
 
     /// <summary>是否启用测速后自动清理IP池（只保留TopN最优IP，其余删除）</summary>
     public bool AutoCleanupEnabled { get; set; }

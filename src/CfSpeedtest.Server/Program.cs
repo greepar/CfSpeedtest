@@ -33,14 +33,21 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
     if (string.IsNullOrEmpty(clientId))
         clientId = Guid.NewGuid().ToString("N");
 
+    var existing = store.GetClient(clientId);
+    if (existing is not null && !existing.Allowed)
+        return ApiResponse<ClientRegisterResponse>.Fail("Client is not allowed to connect");
+
+    var config = store.GetConfig();
+
     var info = new ClientInfo
     {
         ClientId = clientId,
         Isp = req.Isp,
         Name = req.Name ?? $"{req.Isp}-{clientId[..6]}",
-        RegisteredAt = DateTime.UtcNow,
+        RegisteredAt = existing?.RegisteredAt ?? DateTime.UtcNow,
         LastSeenAt = DateTime.UtcNow,
         IsOnline = true,
+        Allowed = existing?.Allowed ?? true,
     };
     store.UpsertClient(info);
 
@@ -48,7 +55,46 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
     {
         ClientId = clientId,
         Success = true,
-        Message = "Registered"
+        Message = "Registered",
+        HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
+    });
+});
+
+// ============================================================
+//  API: 客户端心跳
+// ============================================================
+app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(req.ClientId))
+        return ApiResponse<ClientHeartbeatResponse>.Fail("ClientId is required");
+
+    var config = store.GetConfig();
+    var client = store.GetClient(req.ClientId);
+    if (client is null)
+    {
+        client = new ClientInfo
+        {
+            ClientId = req.ClientId,
+            RegisteredAt = DateTime.UtcNow,
+            Allowed = true,
+        };
+    }
+    else if (!client.Allowed)
+    {
+        return ApiResponse<ClientHeartbeatResponse>.Fail("Client is not allowed to connect");
+    }
+
+    client.Isp = req.Isp;
+    client.Name = string.IsNullOrWhiteSpace(req.Name) ? client.Name : req.Name;
+    client.LastSeenAt = DateTime.UtcNow;
+    client.IsOnline = true;
+    store.UpsertClient(client);
+
+    return ApiResponse<ClientHeartbeatResponse>.Ok(new ClientHeartbeatResponse
+    {
+        Success = true,
+        Message = "Heartbeat received",
+        HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
     });
 });
 
@@ -60,6 +106,8 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
     var client = store.GetClient(clientId);
     if (client is null)
         return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client not registered"));
+    if (!client.Allowed)
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client is not allowed to connect"));
 
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
@@ -100,6 +148,8 @@ app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, Round
     var client = store.GetClient(report.ClientId);
     if (client is null)
         return ApiResponse<string>.Fail("Client not registered");
+    if (!client.Allowed)
+        return ApiResponse<string>.Fail("Client is not allowed to connect");
 
     client.LastSeenAt = DateTime.UtcNow;
     store.UpsertClient(client);
@@ -148,6 +198,28 @@ app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 app.MapGet("/api/clients", (DataStore store) =>
 {
     return ApiResponse<List<ClientInfo>>.Ok(store.GetClients());
+});
+
+// ============================================================
+//  API: WebUI - 删除客户端
+// ============================================================
+app.MapDelete("/api/clients/{clientId}", (string clientId, DataStore store) =>
+{
+    var removed = store.RemoveClient(clientId);
+    return removed
+        ? ApiResponse<string>.Ok("Client removed")
+        : ApiResponse<string>.Fail("Client not found");
+});
+
+// ============================================================
+//  API: WebUI - 设置客户端是否允许连接
+// ============================================================
+app.MapPost("/api/clients/{clientId}/allow", (string clientId, bool allowed, DataStore store) =>
+{
+    var updated = store.SetClientAllowed(clientId, allowed);
+    return updated
+        ? ApiResponse<string>.Ok(allowed ? "Client allowed" : "Client blocked")
+        : ApiResponse<string>.Fail("Client not found");
 });
 
 // ============================================================

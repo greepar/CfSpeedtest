@@ -468,7 +468,10 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     <label>所有 API 定时拉取间隔 (分钟)</label>
                     <input id="cfg-apiinterval" type="number" />
                 </div>
-                <div class="form-group"></div>
+                <div class="form-group">
+                    <label>客户端心跳间隔 (秒)</label>
+                    <input id="cfg-heartbeat-interval" type="number" min="5" />
+                </div>
             </div>
 
             <button type="submit" class="btn btn-primary" style="margin-top:12px;">保存全局配置</button>
@@ -737,20 +740,48 @@ function loadClients() {
             document.getElementById('clients-list').innerHTML = '<div class="empty-state">暂无客户端</div>';
             return;
         }
-        var html = '<table><thead><tr><th>ID</th><th>名称</th><th>运营商</th><th>状态</th><th>注册时间</th><th>最后活跃</th></tr></thead><tbody>';
+        var html = '<table><thead><tr><th>ID</th><th>名称</th><th>运营商</th><th>状态</th><th>允许连接</th><th>注册时间</th><th>最后活跃</th><th>操作</th></tr></thead><tbody>';
         data.forEach(function(c) {
             var isOnline = (Date.now() - new Date(c.lastSeenAt).getTime()) < 5 * 60 * 1000;
+            var allowed = c.allowed !== false;
             html += '<tr>' +
                 '<td style="font-family:monospace;font-size:12px;">' + c.clientId.substring(0,12) + '</td>' +
                 '<td>' + (c.name || '-') + '</td>' +
                 '<td><span class="badge ' + (ISP_CLASSES[c.isp] || '') + '">' + (ISP_NAMES[c.isp] || c.isp) + '</span></td>' +
                 '<td><span class="badge ' + (isOnline ? 'badge-online' : 'badge-offline') + '">' + (isOnline ? '在线' : '离线') + '</span></td>' +
+                '<td><button class="btn ' + (allowed ? 'btn-secondary' : 'danger-btn') + '" onclick="toggleClientAllowed(\'' + c.clientId.replace(/'/g, "\\'") + '\',' + (!allowed) + '">' + (allowed ? '已允许' : '已禁用') + '</button></td>' +
                 '<td>' + fmtTime(c.registeredAt) + '</td>' +
                 '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
+                '<td><button class="btn danger-btn btn-icon" onclick="deleteClient(\'' + c.clientId.replace(/'/g, "\\'") + '\')">X</button></td>' +
                 '</tr>';
         });
         html += '</tbody></table>';
         document.getElementById('clients-list').innerHTML = html;
+    });
+}
+
+function toggleClientAllowed(clientId, allowed) {
+    var text = allowed ? '允许' : '禁用';
+    if (!confirm('确认' + text + '客户端 ' + clientId + ' 连接吗？')) return;
+    api('/api/clients/' + encodeURIComponent(clientId) + '/allow?allowed=' + allowed, 'POST').then(function(r) {
+        if (r.success) {
+            toast('客户端连接权限已更新');
+            loadClients();
+        } else {
+            toast(r.message || '更新失败', false);
+        }
+    });
+}
+
+function deleteClient(clientId) {
+    if (!confirm('确认删除客户端 ' + clientId + ' 吗？')) return;
+    api('/api/clients/' + encodeURIComponent(clientId), 'DELETE').then(function(r) {
+        if (r.success) {
+            toast('客户端已删除');
+            loadClients();
+        } else {
+            toast(r.message || '删除失败', false);
+        }
     });
 }
 
@@ -1031,6 +1062,7 @@ function loadConfig() {
         document.getElementById('cfg-topn').value = c.topN || 5;
         document.getElementById('cfg-client-interval').value = c.clientIntervalMinutes || 60;
         document.getElementById('cfg-apiinterval').value = c.apiRefreshIntervalMinutes || 60;
+        document.getElementById('cfg-heartbeat-interval').value = c.heartbeatIntervalSeconds || 30;
     });
 }
 
@@ -1047,6 +1079,7 @@ function saveConfig(e) {
     serverConfigData.topN = parseInt(document.getElementById('cfg-topn').value) || 5;
     serverConfigData.clientIntervalMinutes = parseInt(document.getElementById('cfg-client-interval').value) || 60;
     serverConfigData.apiRefreshIntervalMinutes = parseInt(document.getElementById('cfg-apiinterval').value) || 60;
+    serverConfigData.heartbeatIntervalSeconds = parseInt(document.getElementById('cfg-heartbeat-interval').value) || 30;
 
     api('/api/config', 'POST', serverConfigData).then(function(r) {
         if (r.success) toast('全局配置已保存');

@@ -165,6 +165,34 @@ public class DataStore
         PersistFile("clients.json", _clients.Values.ToList());
     }
 
+    public bool RemoveClient(string clientId)
+    {
+        var removed = _clients.TryRemove(clientId, out _);
+        if (removed)
+        {
+            PersistFile("clients.json", _clients.Values.ToList());
+        }
+        return removed;
+    }
+
+    public bool SetClientAllowed(string clientId, bool allowed)
+    {
+        if (!_clients.TryGetValue(clientId, out var client))
+        {
+            return false;
+        }
+
+        client.Allowed = allowed;
+        if (!allowed)
+        {
+            client.IsOnline = false;
+        }
+
+        _clients[clientId] = client;
+        PersistFile("clients.json", _clients.Values.ToList());
+        return true;
+    }
+
     // ===== History =====
     public List<TestHistory> GetHistory(int limit = 100)
     {
