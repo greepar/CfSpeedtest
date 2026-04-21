@@ -30,6 +30,10 @@ function Get-DownloadUrl([string]$AssetName) {
     return "$($GhProxyPrefix.TrimEnd('/'))/$rawUrl"
 }
 
+function Get-NssmUrl {
+    return 'https://nssm.cc/release/nssm-2.24.zip'
+}
+
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw '请以管理员身份运行此 PowerShell 脚本'
 }
@@ -44,18 +48,18 @@ $downloadUrl = Get-DownloadUrl -AssetName $assetName
 $zipPath = Join-Path $env:TEMP $assetName
 $stageDir = Join-Path $env:TEMP ("cfspeedtest-client-" + [guid]::NewGuid().ToString('N'))
 $installDir = Join-Path $env:ProgramFiles 'CfSpeedtestClient'
-$taskName = 'CfSpeedtestClient'
+$serviceName = 'CfSpeedtestClient'
 $exePath = Join-Path $installDir 'CfSpeedtest.Client.exe'
+$nssmDir = Join-Path $installDir 'nssm'
+$nssmZipPath = Join-Path $env:TEMP 'nssm-2.24.zip'
+$nssmStageDir = Join-Path $env:TEMP ("nssm-" + [guid]::NewGuid().ToString('N'))
 
 Write-Log "平台: $platform"
 Write-Log "下载地址: $downloadUrl"
 
-if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-}
-
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+New-Item -ItemType Directory -Path $nssmDir -Force | Out-Null
 
 Write-Log '下载客户端...'
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
@@ -64,17 +68,40 @@ Write-Log '解压客户端...'
 Expand-Archive -Path $zipPath -DestinationPath $stageDir -Force
 Copy-Item -Path (Join-Path $stageDir '*') -Destination $installDir -Recurse -Force
 
-$argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service"
-$action = New-ScheduledTaskAction -Execute $exePath -Argument $argList
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Write-Log '准备 NSSM...'
+$nssmExe = Join-Path $nssmDir 'nssm.exe'
+if (-not (Test-Path $nssmExe)) {
+    Invoke-WebRequest -Uri (Get-NssmUrl) -OutFile $nssmZipPath
+    New-Item -ItemType Directory -Path $nssmStageDir -Force | Out-Null
+    Expand-Archive -Path $nssmZipPath -DestinationPath $nssmStageDir -Force
+    $nssmSource = Join-Path $nssmStageDir 'nssm-2.24\win64\nssm.exe'
+    if ($platform -eq 'win-x86') {
+        $nssmSource = Join-Path $nssmStageDir 'nssm-2.24\win32\nssm.exe'
+    }
+    Copy-Item -Path $nssmSource -Destination $nssmExe -Force
+}
 
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
-Start-ScheduledTask -TaskName $taskName
+$argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service"
+
+Write-Log '安装/更新 Windows Service...'
+& $nssmExe stop $serviceName | Out-Null
+& $nssmExe remove $serviceName confirm | Out-Null
+
+& $nssmExe install $serviceName $exePath $argList | Out-Null
+& $nssmExe set $serviceName AppDirectory $installDir | Out-Null
+& $nssmExe set $serviceName DisplayName 'CfSpeedtest Client' | Out-Null
+& $nssmExe set $serviceName Description 'CfSpeedtest native client service' | Out-Null
+& $nssmExe set $serviceName Start SERVICE_AUTO_START | Out-Null
+& $nssmExe set $serviceName AppExit Default Restart | Out-Null
+& $nssmExe set $serviceName AppRestartDelay 5000 | Out-Null
+& $nssmExe set $serviceName ObjectName LocalSystem | Out-Null
+& $nssmExe start $serviceName | Out-Null
 
 Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $nssmZipPath -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $nssmStageDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Log '安装完成'
-Write-Log "查看任务: Get-ScheduledTask -TaskName $taskName"
-Write-Log "立即启动: Start-ScheduledTask -TaskName $taskName"
+Write-Log "查看服务: sc query $serviceName"
+Write-Log "查看 NSSM: $nssmExe"
