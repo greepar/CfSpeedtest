@@ -42,6 +42,12 @@ public class SpeedTestTask
     /// <summary>返回前N个最优结果</summary>
     public int TopN { get; set; } = 5;
 
+    /// <summary>最低下载速度阈值(KB/s)，低于该值不计入最终上传和DNS候选</summary>
+    public double MinDownloadSpeedKBps { get; set; }
+
+    /// <summary>下载测速限速(KB/s)，0 表示不限速</summary>
+    public double MaxDownloadSpeedKBps { get; set; }
+
     /// <summary>客户端下次轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;
 
@@ -113,6 +119,12 @@ public class ClientRegisterRequest
 
     /// <summary>客户端备注名</summary>
     public string? Name { get; set; }
+
+    /// <summary>客户端版本号</summary>
+    public string? Version { get; set; }
+
+    /// <summary>客户端平台</summary>
+    public string? Platform { get; set; }
 }
 
 /// <summary>
@@ -134,6 +146,8 @@ public class ClientHeartbeatRequest
     public string ClientId { get; set; } = string.Empty;
     public IspType Isp { get; set; }
     public string? Name { get; set; }
+    public string? Version { get; set; }
+    public string? Platform { get; set; }
 }
 
 /// <summary>
@@ -144,6 +158,75 @@ public class ClientHeartbeatResponse
     public bool Success { get; set; }
     public string? Message { get; set; }
     public int HeartbeatIntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// 服务端预留白名单客户端 ID 的请求
+/// </summary>
+public class ClientReservationRequest
+{
+    public string? ClientId { get; set; }
+    public IspType Isp { get; set; }
+    public string? Name { get; set; }
+}
+
+/// <summary>
+/// 服务端预留白名单客户端 ID 的响应
+/// </summary>
+public class ClientReservationResponse
+{
+    public string ClientId { get; set; } = string.Empty;
+    public string? Message { get; set; }
+}
+
+/// <summary>
+/// 客户端更新检查结果
+/// </summary>
+public class ClientUpdateInfo
+{
+    public bool Enabled { get; set; }
+    public string CurrentVersion { get; set; } = string.Empty;
+    public string LatestVersion { get; set; } = string.Empty;
+    public string Platform { get; set; } = string.Empty;
+    public bool HasUpdate { get; set; }
+    public string? DownloadUrl { get; set; }
+    public string? PackageFileName { get; set; }
+    public string? Message { get; set; }
+}
+
+public class ClientUpdatePackageStatus
+{
+    public string Platform { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string DownloadUrl { get; set; } = string.Empty;
+}
+
+public class ClientUpdateOverview
+{
+    public bool Enabled { get; set; }
+    public string LatestVersion { get; set; } = string.Empty;
+    public string Repository { get; set; } = string.Empty;
+    public string ReleaseTag { get; set; } = string.Empty;
+    public string GhProxyPrefix { get; set; } = string.Empty;
+    public List<ClientUpdatePackageStatus> Packages { get; set; } = [];
+}
+
+/// <summary>
+/// 客户端请求补拉未测过 IP 的请求
+/// </summary>
+public class AdditionalIpBatchRequest
+{
+    public string ClientId { get; set; } = string.Empty;
+    public IspType Isp { get; set; }
+    public List<string> ExcludeIps { get; set; } = [];
+}
+
+/// <summary>
+/// 服务端返回补拉的新 IP 批次
+/// </summary>
+public class AdditionalIpBatchResponse
+{
+    public List<string> IpAddresses { get; set; } = [];
 }
 
 /// <summary>
@@ -162,6 +245,8 @@ public class ClientInfo
     public string ClientId { get; set; } = string.Empty;
     public IspType Isp { get; set; }
     public string? Name { get; set; }
+    public string? Version { get; set; }
+    public string? Platform { get; set; }
     public DateTime RegisteredAt { get; set; } = DateTime.UtcNow;
     public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
     public bool IsOnline { get; set; }
@@ -269,6 +354,30 @@ public class ServerConfig
 
     /// <summary>客户端心跳间隔(秒)</summary>
     public int HeartbeatIntervalSeconds { get; set; } = 30;
+
+    /// <summary>最低下载速度阈值(KB/s)，低于该值的结果不会进入最终TopN</summary>
+    public double MinDownloadSpeedKBps { get; set; }
+
+    /// <summary>下载测速限速(KB/s)，0 表示不限速</summary>
+    public double MaxDownloadSpeedKBps { get; set; }
+
+    /// <summary>是否只允许白名单中的客户端 ID 连接</summary>
+    public bool ClientWhitelistOnly { get; set; }
+
+    /// <summary>是否启用客户端版本检查和更新</summary>
+    public bool ClientUpdateEnabled { get; set; }
+
+    /// <summary>服务端提供的最新客户端版本号</summary>
+    public string LatestClientVersion { get; set; } = string.Empty;
+
+    /// <summary>GitHub 仓库，例如 greepar/CfSpeedtest</summary>
+    public string ClientUpdateRepository { get; set; } = string.Empty;
+
+    /// <summary>GitHub Release Tag，例如 v1.0 或 v1.x</summary>
+    public string ClientUpdateReleaseTag { get; set; } = string.Empty;
+
+    /// <summary>可选的 GH Proxy 前缀，例如 https://ghproxy.com/</summary>
+    public string ClientUpdateGhProxyPrefix { get; set; } = string.Empty;
 
     /// <summary>是否启用测速后自动清理IP池（只保留TopN最优IP，其余删除）</summary>
     public bool AutoCleanupEnabled { get; set; }

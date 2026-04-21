@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -16,10 +18,14 @@ Console.WriteLine();
 
 // 读取配置
 var serverUrl = GetArg(args, "server", "http://127.0.0.1:5000");
+var explicitClientId = GetArg(args, "client-id", "");
 var ispStr = GetArg(args, "isp", "Telecom");
 var clientName = GetArg(args, "name", Environment.MachineName);
 var intervalStr = GetArg(args, "interval", "60"); // 默认60分钟
+var autoUpdate = HasFlag(args, "auto-update");
 var oneshot = HasFlag(args, "once");
+var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
+var clientPlatform = DetectClientPlatform();
 
 if (!Enum.TryParse<IspType>(ispStr, true, out var isp))
 {
@@ -31,16 +37,24 @@ var intervalMinutes = int.Parse(intervalStr);
 Console.WriteLine($"Server:   {serverUrl}");
 Console.WriteLine($"ISP:      {isp}");
 Console.WriteLine($"Name:     {clientName}");
+Console.WriteLine($"Version:  {currentVersion}");
+Console.WriteLine($"Platform: {clientPlatform}");
 Console.WriteLine($"Default interval: {intervalMinutes}min");
 Console.WriteLine();
 
 using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 var stateFile = Path.Combine(AppContext.BaseDirectory, "client-state.json");
 var localState = LoadClientState(stateFile);
+if (!string.IsNullOrWhiteSpace(explicitClientId))
+{
+    localState.ClientId = explicitClientId.Trim();
+}
 if (!string.IsNullOrWhiteSpace(localState.ClientId))
 {
     Console.WriteLine($"Local clientId: {localState.ClientId}");
 }
+
+await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient);
 
 // NativeAOT-safe JSON options using source generators
 var jsonOpts = new JsonSerializerOptions
@@ -55,7 +69,14 @@ string clientId;
 int heartbeatIntervalSeconds = 30;
 try
 {
-    var regReq = new ClientRegisterRequest { ClientId = localState.ClientId, Isp = isp, Name = clientName };
+    var regReq = new ClientRegisterRequest
+    {
+        ClientId = localState.ClientId,
+        Isp = isp,
+        Name = clientName,
+        Version = currentVersion,
+        Platform = clientPlatform,
+    };
     var regJson = JsonSerializer.Serialize(regReq, AppJsonContext.Default.ClientRegisterRequest);
     var regResp = await httpClient.PostAsync(
         $"{serverUrl}/api/client/register",
@@ -83,7 +104,7 @@ catch (Exception ex)
 }
 
 using var heartbeatCts = new CancellationTokenSource();
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, httpClient, heartbeatIntervalSeconds, heartbeatCts.Token);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, heartbeatIntervalSeconds, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -154,13 +175,17 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Round started.");
     }
 
-    var results = new List<IpTestResult>();
+    var allResults = new List<IpTestResult>();
+    var testedIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var pendingIps = new Queue<string>(task.IpAddresses);
 
-    // 2. 逐个IP测速
-    for (int i = 0; i < task.IpAddresses.Count; i++)
+    while (pendingIps.Count > 0)
     {
-        var ip = task.IpAddresses[i];
-        Console.Write($"  [{i + 1}/{task.IpAddresses.Count}] {ip,-16} ");
+        var ip = pendingIps.Dequeue();
+        if (!testedIps.Add(ip))
+            continue;
+
+        Console.Write($"  [{testedIps.Count}] {ip,-16} ");
 
         var result = new IpTestResult { IpAddress = ip };
 
@@ -173,12 +198,12 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
         {
             Console.WriteLine("SKIP (high loss)");
             result.Score = 0;
-            results.Add(result);
+            allResults.Add(result);
             continue;
         }
 
         // 2b. 下载速度测试
-        await TestDownloadAsync(result, ip, task.TestUrl, task.TestHost, task.TestPort, task.DownloadDurationSeconds);
+        await TestDownloadAsync(result, ip, task.TestUrl, task.TestHost, task.TestPort, task.DownloadDurationSeconds, task.MaxDownloadSpeedKBps);
         Console.Write($"DL: {result.DownloadSpeedKBps,8:F1} KB/s | ");
 
         // 2c. 综合评分: 速度权重60%, 延迟权重25%, 丢包权重15%
@@ -188,17 +213,32 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
         result.Score = speedScore * 0.60 + latencyScore * 0.25 + lossScore * 0.15;
 
         Console.WriteLine($"Score: {result.Score:F1}");
-        results.Add(result);
+        allResults.Add(result);
+
+        var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
+        if (qualifiedCount >= task.TopN)
+            continue;
+
+        if (pendingIps.Count == 0)
+        {
+            var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, isp, testedIps, httpClient);
+            foreach (var extraIp in additionalIps)
+            {
+                if (!testedIps.Contains(extraIp))
+                    pendingIps.Enqueue(extraIp);
+            }
+        }
     }
 
-    // 3. 排序取TopN
-    var topResults = results
+    // 3. 只保留达标结果，再排序取TopN
+    var topResults = allResults
+        .Where(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps)
         .OrderByDescending(r => r.Score)
         .Take(task.TopN)
         .ToList();
 
     Console.WriteLine();
-    Console.WriteLine($"=== Top {topResults.Count} Results ===");
+    Console.WriteLine($"=== Qualified Top {topResults.Count} Results ===");
     for (int i = 0; i < topResults.Count; i++)
     {
         var r = topResults[i];
@@ -227,11 +267,113 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
     return 0;
 }
 
+static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, HttpClient httpClient)
+{
+    try
+    {
+        var resp = await httpClient.GetAsync($"{serverUrl}/api/client/update?version={Uri.EscapeDataString(currentVersion)}&platform={Uri.EscapeDataString(clientPlatform)}");
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientUpdateInfo);
+        if (result?.Success != true || result.Data is null)
+            return;
+
+        var info = result.Data;
+        if (!info.Enabled)
+        {
+            Console.WriteLine($"Update check: {info.Message}");
+            return;
+        }
+
+        if (!info.HasUpdate || string.IsNullOrWhiteSpace(info.DownloadUrl))
+        {
+            Console.WriteLine($"Update check: {info.Message}");
+            return;
+        }
+
+        Console.WriteLine($"New client version available for {info.Platform}: {info.LatestVersion} ({info.DownloadUrl})");
+        if (!autoUpdate)
+        {
+            Console.WriteLine("Auto-update disabled. Start client with --auto-update to update automatically.");
+            return;
+        }
+
+        var tempFile = Path.Combine(Path.GetTempPath(), Path.GetFileName(new Uri(info.DownloadUrl).AbsolutePath));
+        Console.WriteLine("Downloading update package...");
+        using var download = await httpClient.GetStreamAsync(info.DownloadUrl);
+        using var file = File.Create(tempFile);
+        await download.CopyToAsync(file);
+        Console.WriteLine($"Update package downloaded to: {tempFile}");
+        Console.WriteLine("Please replace the client executable manually with the downloaded package content.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Update check failed: {ex.Message}");
+    }
+}
+
+static string DetectClientPlatform()
+{
+    if (OperatingSystem.IsWindows())
+        return "win-x64";
+
+    if (OperatingSystem.IsLinux())
+    {
+        var rid = RuntimeInformation.RuntimeIdentifier;
+        return rid.Contains("musl", StringComparison.OrdinalIgnoreCase)
+            ? "linux-musl-x64"
+            : "linux-x64";
+    }
+
+    return "win-x64";
+}
+
+static async Task<List<string>> FetchAdditionalIpsAsync(
+    string serverUrl,
+    string clientId,
+    IspType isp,
+    HashSet<string> testedIps,
+    HttpClient httpClient)
+{
+    Console.WriteLine("  Qualified results not enough, requesting additional IP batch...");
+
+    var req = new AdditionalIpBatchRequest
+    {
+        ClientId = clientId,
+        Isp = isp,
+        ExcludeIps = testedIps.ToList(),
+    };
+
+    var json = JsonSerializer.Serialize(req, AppJsonContext.Default.AdditionalIpBatchRequest);
+    var resp = await httpClient.PostAsync(
+        $"{serverUrl}/api/task/additional",
+        new StringContent(json, Encoding.UTF8, "application/json"));
+    resp.EnsureSuccessStatusCode();
+    var body = await resp.Content.ReadAsStringAsync();
+    var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseAdditionalIpBatchResponse);
+
+    if (result?.Success != true || result.Data is null)
+    {
+        Console.WriteLine($"  Additional batch unavailable: {result?.Message}");
+        return [];
+    }
+
+    var ips = result.Data.IpAddresses
+        .Where(ip => !testedIps.Contains(ip))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    Console.WriteLine($"  Received {ips.Count} additional IP(s)");
+    return ips;
+}
+
 static Task StartHeartbeatLoopAsync(
     string serverUrl,
     string clientId,
     IspType isp,
     string clientName,
+    string currentVersion,
+    string clientPlatform,
     HttpClient httpClient,
     int heartbeatIntervalSeconds,
     CancellationToken cancellationToken)
@@ -250,6 +392,8 @@ static Task StartHeartbeatLoopAsync(
                     ClientId = clientId,
                     Isp = isp,
                     Name = clientName,
+                    Version = currentVersion,
+                    Platform = clientPlatform,
                 };
                 var json = JsonSerializer.Serialize(req, AppJsonContext.Default.ClientHeartbeatRequest);
                 var resp = await httpClient.PostAsync(
@@ -282,7 +426,7 @@ static Task StartHeartbeatLoopAsync(
 
         if (!cancellationToken.IsCancellationRequested)
         {
-            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, httpClient, intervalSeconds, cancellationToken);
+            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, intervalSeconds, cancellationToken);
         }
     }, cancellationToken);
 }
@@ -345,7 +489,7 @@ static async Task TestTcpAsync(IpTestResult result, string ip, int port, int dur
 //  HTTPS 下载速度测试
 // ============================================================
 static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTemplate,
-    string host, int port, int durationSeconds)
+    string host, int port, int durationSeconds, double maxDownloadSpeedKBps)
 {
     try
     {
@@ -400,6 +544,21 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
             var read = await dlStream.ReadAsync(buffer, cts.Token);
             if (read == 0) break;
             totalBytes += read;
+
+            if (maxDownloadSpeedKBps > 0)
+            {
+                var elapsedSeconds = Math.Max(sw.Elapsed.TotalSeconds, 0.001);
+                var actualKBps = totalBytes / 1024.0 / elapsedSeconds;
+                if (actualKBps > maxDownloadSpeedKBps)
+                {
+                    var targetSeconds = (totalBytes / 1024.0) / maxDownloadSpeedKBps;
+                    var delayMs = (int)Math.Ceiling((targetSeconds - elapsedSeconds) * 1000);
+                    if (delayMs > 0)
+                    {
+                        await Task.Delay(delayMs, cts.Token);
+                    }
+                }
+            }
         }
 
         sw.Stop();

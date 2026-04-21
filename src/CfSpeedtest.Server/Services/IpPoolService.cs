@@ -163,11 +163,17 @@ public class IpPoolService : BackgroundService
     /// </summary>
     public List<string> GetBatch(string isp)
     {
+        return GetBatch(isp, []);
+    }
+
+    public List<string> GetBatch(string isp, IEnumerable<string> excludeIps)
+    {
         var config = _store.GetConfig();
         var manualIps = config.IpSources.TryGetValue(isp, out var source) ? source.ManualIps : [];
         var apiIps = _store.GetApiIpPool(isp);
+        var excludeSet = excludeIps.Select(ip => ip.Trim()).Where(ip => !string.IsNullOrWhiteSpace(ip)).ToHashSet();
         
-        var allIps = manualIps.Concat(apiIps).Distinct().ToList();
+        var allIps = manualIps.Concat(apiIps).Distinct().Where(ip => !excludeSet.Contains(ip)).ToList();
 
         if (allIps.Count == 0) return [];
 

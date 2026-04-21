@@ -29,21 +29,29 @@ app.UseStaticFiles();
 // ============================================================
 app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store) =>
 {
+    var config = store.GetConfig();
     var clientId = req.ClientId;
-    if (string.IsNullOrEmpty(clientId))
+    if (string.IsNullOrWhiteSpace(clientId))
+    {
+        if (config.ClientWhitelistOnly)
+            return ApiResponse<ClientRegisterResponse>.Fail("ClientId is required in whitelist mode");
+
         clientId = Guid.NewGuid().ToString("N");
+    }
 
     var existing = store.GetClient(clientId);
+    if (existing is null && config.ClientWhitelistOnly)
+        return ApiResponse<ClientRegisterResponse>.Fail("ClientId is not in whitelist");
     if (existing is not null && !existing.Allowed)
         return ApiResponse<ClientRegisterResponse>.Fail("Client is not allowed to connect");
-
-    var config = store.GetConfig();
 
     var info = new ClientInfo
     {
         ClientId = clientId,
         Isp = req.Isp,
         Name = req.Name ?? $"{req.Isp}-{clientId[..6]}",
+        Version = string.IsNullOrWhiteSpace(req.Version) ? existing?.Version : req.Version,
+        Platform = string.IsNullOrWhiteSpace(req.Platform) ? existing?.Platform : req.Platform,
         RegisteredAt = existing?.RegisteredAt ?? DateTime.UtcNow,
         LastSeenAt = DateTime.UtcNow,
         IsOnline = true,
@@ -72,6 +80,9 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
     var client = store.GetClient(req.ClientId);
     if (client is null)
     {
+        if (config.ClientWhitelistOnly)
+            return ApiResponse<ClientHeartbeatResponse>.Fail("ClientId is not in whitelist");
+
         client = new ClientInfo
         {
             ClientId = req.ClientId,
@@ -86,6 +97,8 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
 
     client.Isp = req.Isp;
     client.Name = string.IsNullOrWhiteSpace(req.Name) ? client.Name : req.Name;
+    client.Version = string.IsNullOrWhiteSpace(req.Version) ? client.Version : req.Version;
+    client.Platform = string.IsNullOrWhiteSpace(req.Platform) ? client.Platform : req.Platform;
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
     store.UpsertClient(client);
@@ -95,6 +108,102 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         Success = true,
         Message = "Heartbeat received",
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
+    });
+});
+
+// ============================================================
+//  API: 客户端检查更新
+// ============================================================
+app.MapGet("/api/client/update", (HttpContext http, DataStore store, string version, string? platform) =>
+{
+    var config = store.GetConfig();
+    var currentVersion = string.IsNullOrWhiteSpace(version) ? "0.0.0" : version.Trim();
+    var latestVersion = string.IsNullOrWhiteSpace(config.LatestClientVersion) ? currentVersion : config.LatestClientVersion.Trim();
+    var clientPlatform = string.IsNullOrWhiteSpace(platform) ? "win-x64" : platform.Trim();
+    var repository = config.ClientUpdateRepository.Trim();
+    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
+
+    if (!config.ClientUpdateEnabled)
+    {
+        return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
+        {
+            Enabled = false,
+            CurrentVersion = currentVersion,
+            LatestVersion = latestVersion,
+            Platform = clientPlatform,
+            HasUpdate = false,
+            Message = "客户端自动更新未启用"
+        });
+    }
+
+    if (string.IsNullOrWhiteSpace(latestVersion) || string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    {
+        return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
+        {
+            Enabled = true,
+            CurrentVersion = currentVersion,
+            LatestVersion = latestVersion,
+            Platform = clientPlatform,
+            HasUpdate = false,
+            Message = "服务端未配置 GitHub Release 更新源"
+        });
+    }
+
+    var hasUpdate = IsVersionNewer(latestVersion, currentVersion);
+    var fileName = GetClientUpdateFileName(clientPlatform, latestVersion);
+    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
+    var downloadUrl = string.IsNullOrWhiteSpace(ghProxyPrefix)
+        ? rawUrl
+        : CombineProxyUrl(ghProxyPrefix, rawUrl);
+    return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
+    {
+        Enabled = true,
+        CurrentVersion = currentVersion,
+        LatestVersion = latestVersion,
+        Platform = clientPlatform,
+        HasUpdate = hasUpdate,
+        DownloadUrl = hasUpdate ? downloadUrl : null,
+        PackageFileName = fileName,
+        Message = hasUpdate ? "发现新版本" : "当前已是最新版本"
+    });
+});
+
+app.MapGet("/api/client/update/overview", (DataStore store) =>
+{
+    var config = store.GetConfig();
+    var platforms = new[] { "win-x64", "linux-x64", "linux-musl-x64" };
+    var packages = new List<ClientUpdatePackageStatus>();
+    var repository = config.ClientUpdateRepository.Trim();
+    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
+
+    foreach (var platform in platforms)
+    {
+        var fileName = GetClientUpdateFileName(platform, config.LatestClientVersion);
+        var rawUrl = string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag)
+            ? string.Empty
+            : $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
+        var downloadUrl = string.IsNullOrWhiteSpace(rawUrl)
+            ? string.Empty
+            : (string.IsNullOrWhiteSpace(ghProxyPrefix) ? rawUrl : CombineProxyUrl(ghProxyPrefix, rawUrl));
+
+        packages.Add(new ClientUpdatePackageStatus
+        {
+            Platform = platform,
+            FileName = fileName,
+            DownloadUrl = downloadUrl,
+        });
+    }
+
+    return ApiResponse<ClientUpdateOverview>.Ok(new ClientUpdateOverview
+    {
+        Enabled = config.ClientUpdateEnabled,
+        LatestVersion = config.LatestClientVersion,
+        Repository = repository,
+        ReleaseTag = releaseTag,
+        GhProxyPrefix = ghProxyPrefix,
+        Packages = packages,
     });
 });
 
@@ -129,6 +238,8 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         DownloadDurationSeconds = config.DownloadDurationSeconds,
         TcpTestDurationSeconds = config.TcpTestDurationSeconds,
         TopN = config.TopN,
+        MinDownloadSpeedKBps = config.MinDownloadSpeedKBps,
+        MaxDownloadSpeedKBps = config.MaxDownloadSpeedKBps,
         ClientIntervalMinutes = config.ClientIntervalMinutes,
         TaskId = round.TaskId,
         ScheduledAtUtc = round.ScheduledAtUtc,
@@ -176,6 +287,31 @@ app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, Round
 });
 
 // ============================================================
+//  API: 客户端补拉新的未测IP批次
+// ============================================================
+app.MapPost("/api/task/additional", (AdditionalIpBatchRequest req, DataStore store, IpPoolService ipPool) =>
+{
+    if (string.IsNullOrWhiteSpace(req.ClientId))
+        return ApiResponse<AdditionalIpBatchResponse>.Fail("ClientId is required");
+
+    var client = store.GetClient(req.ClientId);
+    if (client is null)
+        return ApiResponse<AdditionalIpBatchResponse>.Fail("Client not registered");
+    if (!client.Allowed)
+        return ApiResponse<AdditionalIpBatchResponse>.Fail("Client is not allowed to connect");
+
+    client.LastSeenAt = DateTime.UtcNow;
+    client.IsOnline = true;
+    store.UpsertClient(client);
+
+    var ips = ipPool.GetBatch(req.Isp.ToString(), req.ExcludeIps);
+    return ApiResponse<AdditionalIpBatchResponse>.Ok(new AdditionalIpBatchResponse
+    {
+        IpAddresses = ips,
+    });
+});
+
+// ============================================================
 //  API: WebUI - 获取配置
 // ============================================================
 app.MapGet("/api/config", (DataStore store) =>
@@ -198,6 +334,37 @@ app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 app.MapGet("/api/clients", (DataStore store) =>
 {
     return ApiResponse<List<ClientInfo>>.Ok(store.GetClients());
+});
+
+// ============================================================
+//  API: WebUI - 预生成并保留允许连接的客户端 ID
+// ============================================================
+app.MapPost("/api/clients/reserve", (ClientReservationRequest req, DataStore store) =>
+{
+    var clientId = string.IsNullOrWhiteSpace(req.ClientId)
+        ? Guid.NewGuid().ToString("N")
+        : req.ClientId.Trim();
+
+    if (store.GetClient(clientId) is not null)
+        return ApiResponse<ClientReservationResponse>.Fail("ClientId already exists");
+
+    var info = new ClientInfo
+    {
+        ClientId = clientId,
+        Isp = req.Isp,
+        Name = string.IsNullOrWhiteSpace(req.Name) ? $"{req.Isp}-{clientId[..6]}" : req.Name,
+        RegisteredAt = DateTime.UtcNow,
+        LastSeenAt = DateTime.MinValue,
+        IsOnline = false,
+        Allowed = true,
+    };
+    store.UpsertClient(info);
+
+    return ApiResponse<ClientReservationResponse>.Ok(new ClientReservationResponse
+    {
+        ClientId = clientId,
+        Message = "Reserved"
+    });
 });
 
 // ============================================================
@@ -333,3 +500,23 @@ app.MapPost("/api/dns/test-auth", async (DnsUpdateService dns) =>
 });
 
 app.Run();
+
+static bool IsVersionNewer(string latestVersion, string currentVersion)
+{
+    if (Version.TryParse(latestVersion, out var latest) && Version.TryParse(currentVersion, out var current))
+    {
+        return latest > current;
+    }
+
+    return !string.Equals(latestVersion, currentVersion, StringComparison.OrdinalIgnoreCase);
+}
+
+static string GetClientUpdateFileName(string platform, string version)
+{
+    return $"CfSpeedtest.Client-{platform}-{version}.zip";
+}
+
+static string CombineProxyUrl(string proxyPrefix, string rawUrl)
+{
+    return proxyPrefix.TrimEnd('/') + "/" + rawUrl;
+}

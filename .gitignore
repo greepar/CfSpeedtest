@@ -13,3 +13,5 @@ publish/
 
 src/**/bin/
 src/**/obj/
+docs/node_modules/
+docs/.vitepress/dist/
