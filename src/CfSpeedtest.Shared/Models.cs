@@ -229,6 +229,43 @@ public class ClientUpdateOverview
     public List<ClientUpdatePackageStatus> Packages { get; set; } = [];
 }
 
+public class ClientInstallScriptResponse
+{
+    public string Platform { get; set; } = string.Empty;
+    public string ScriptType { get; set; } = string.Empty;
+    public string ServiceKind { get; set; } = string.Empty;
+    public string ScriptFileName { get; set; } = string.Empty;
+    public string Script { get; set; } = string.Empty;
+}
+
+public class WebUiAuthConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string Username { get; set; } = "admin";
+    public string PasswordHash { get; set; } = string.Empty;
+    public string PasswordSalt { get; set; } = string.Empty;
+}
+
+public class WebUiLoginRequest
+{
+    public string Username { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+}
+
+public class WebUiChangePasswordRequest
+{
+    public string CurrentPassword { get; set; } = string.Empty;
+    public string NewUsername { get; set; } = string.Empty;
+    public string NewPassword { get; set; } = string.Empty;
+}
+
+public class WebUiAuthStatus
+{
+    public bool Enabled { get; set; }
+    public bool Authenticated { get; set; }
+    public string Username { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// 客户端请求补拉未测过 IP 的请求
 /// </summary>
@@ -405,6 +442,9 @@ public class ServerConfig
 
     /// <summary>华为云 DNS 配置</summary>
     public HuaweiDnsConfig HuaweiDns { get; set; } = new();
+
+    /// <summary>WebUI 登录配置</summary>
+    public WebUiAuthConfig WebUiAuth { get; set; } = new();
 }
 
 /// <summary>

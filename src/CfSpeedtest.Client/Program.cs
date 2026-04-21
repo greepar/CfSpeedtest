@@ -18,10 +18,7 @@ using CfSpeedtest.Shared;
 Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
 Console.WriteLine();
 
-if (HasFlag(args, "apply-update"))
-{
-    return await RunApplyUpdateModeAsync(args);
-}
+CleanupOldFiles();
 
 // 读取配置
 var serverUrl = GetArg(args, "server", "http://127.0.0.1:5000");
@@ -30,6 +27,7 @@ var ispStr = GetArg(args, "isp", "Telecom");
 var clientName = GetArg(args, "name", Environment.MachineName);
 var intervalStr = GetArg(args, "interval", "60"); // 默认60分钟
 var autoUpdate = !HasFlag(args, "disable-auto-update");
+var isService = HasFlag(args, "service");
 var oneshot = HasFlag(args, "once");
 var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
 var clientPlatform = DetectClientPlatform();
@@ -61,7 +59,7 @@ if (!string.IsNullOrWhiteSpace(localState.ClientId))
     Console.WriteLine($"Local clientId: {localState.ClientId}");
 }
 
-await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient);
+await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, httpClient);
 
 // NativeAOT-safe JSON options using source generators
 var jsonOpts = new JsonSerializerOptions
@@ -275,7 +273,7 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
     return 0;
 }
 
-static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, HttpClient httpClient)
+static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
 {
     try
     {
@@ -308,9 +306,11 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
 
         var tempFile = Path.Combine(Path.GetTempPath(), Path.GetFileName(new Uri(info.DownloadUrl).AbsolutePath));
         Console.WriteLine("Downloading update package...");
-        using var download = await httpClient.GetStreamAsync(info.DownloadUrl);
-        using var file = File.Create(tempFile);
-        await download.CopyToAsync(file);
+        using (var download = await httpClient.GetStreamAsync(info.DownloadUrl))
+        using (var file = File.Create(tempFile))
+        {
+            await download.CopyToAsync(file);
+        }
         Console.WriteLine($"Update package downloaded to: {tempFile}");
 
         var currentExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
@@ -327,128 +327,25 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         Console.WriteLine("Extracting update package...");
         ZipFile.ExtractToDirectory(tempFile, stagingDir, true);
 
-        var restartArgsFile = Path.Combine(stagingDir, "restart-args.txt");
-        await File.WriteAllLinesAsync(restartArgsFile, Environment.GetCommandLineArgs().Skip(1).Where(a => !string.Equals(a, "--apply-update", StringComparison.OrdinalIgnoreCase)));
+        Console.WriteLine("Applying update files...");
+        await ApplyUpdateInPlaceAsync(stagingDir, targetDir);
+        TryDeleteDirectory(stagingDir);
+        TryDeleteFile(tempFile);
 
-        var updaterArgs = new[]
+        if (isService)
         {
-            "--apply-update",
-            "--parent-pid", Process.GetCurrentProcess().Id.ToString(),
-            "--update-package", tempFile,
-            "--update-staging", stagingDir,
-            "--update-target", targetDir,
-            "--restart-args-file", restartArgsFile,
-        };
-
-        Console.WriteLine("Launching updater...");
-        Process.Start(new ProcessStartInfo
+            Console.WriteLine("Update installed. Please restart the service or service manager to load the new version.");
+        }
+        else
         {
-            FileName = currentExe,
-            Arguments = string.Join(" ", updaterArgs.Select(QuoteArg)),
-            UseShellExecute = false,
-            WorkingDirectory = targetDir,
-        });
+            Console.WriteLine("Update installed. Please start the client again to continue.");
+        }
 
-        Console.WriteLine("Updater launched. Exiting current client for self-update...");
         Environment.Exit(0);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"Update check failed: {ex.Message}");
-    }
-}
-
-static async Task<int> RunApplyUpdateModeAsync(string[] args)
-{
-    var parentPidText = GetArg(args, "parent-pid", "0");
-    var packagePath = GetArg(args, "update-package", "");
-    var stagingDir = GetArg(args, "update-staging", "");
-    var targetDir = GetArg(args, "update-target", "");
-    var restartArgsFile = GetArg(args, "restart-args-file", "");
-
-    Console.WriteLine("Running self-updater mode...");
-
-    if (int.TryParse(parentPidText, out var parentPid) && parentPid > 0)
-    {
-        try
-        {
-            var parent = Process.GetProcessById(parentPid);
-            parent.WaitForExit(30000);
-        }
-        catch
-        {
-            // ignored
-        }
-    }
-
-    if (string.IsNullOrWhiteSpace(stagingDir) || string.IsNullOrWhiteSpace(targetDir) || !Directory.Exists(stagingDir))
-    {
-        Console.WriteLine("Updater staging directory is missing.");
-        return 1;
-    }
-
-    var backupDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-backup-{Guid.NewGuid():N}");
-    Directory.CreateDirectory(backupDir);
-
-    try
-    {
-        Console.WriteLine("Backing up current files...");
-        foreach (var sourceFile in Directory.GetFiles(targetDir))
-        {
-            var fileName = Path.GetFileName(sourceFile);
-            if (string.Equals(fileName, "client-state.json", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            File.Copy(sourceFile, Path.Combine(backupDir, fileName), true);
-        }
-
-        Console.WriteLine("Applying update files...");
-        foreach (var sourceFile in Directory.GetFiles(stagingDir))
-        {
-            var fileName = Path.GetFileName(sourceFile);
-            File.Copy(sourceFile, Path.Combine(targetDir, fileName), true);
-        }
-
-        Console.WriteLine("Restarting updated client...");
-        var targetExe = Path.Combine(targetDir, Path.GetFileName(Environment.ProcessPath ?? "CfSpeedtest.Client.exe"));
-        var restartArgs = File.Exists(restartArgsFile)
-            ? await File.ReadAllLinesAsync(restartArgsFile)
-            : [];
-
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = targetExe,
-            Arguments = string.Join(" ", restartArgs.Select(QuoteArg)),
-            UseShellExecute = false,
-            WorkingDirectory = targetDir,
-        });
-
-        TryDeleteDirectory(stagingDir);
-        TryDeleteDirectory(backupDir);
-        TryDeleteFile(packagePath);
-        TryDeleteFile(restartArgsFile);
-        return 0;
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Update apply failed: {ex.Message}");
-        Console.WriteLine("Attempting rollback...");
-
-        try
-        {
-            foreach (var backupFile in Directory.GetFiles(backupDir))
-            {
-                var fileName = Path.GetFileName(backupFile);
-                File.Copy(backupFile, Path.Combine(targetDir, fileName), true);
-            }
-            Console.WriteLine("Rollback completed.");
-        }
-        catch (Exception rollbackEx)
-        {
-            Console.WriteLine($"Rollback failed: {rollbackEx.Message}");
-        }
-
-        return 1;
     }
 }
 
@@ -575,7 +472,7 @@ static Task StartHeartbeatLoopAsync(
                     if (result.Data.ForceCheckUpdate)
                     {
                         Console.WriteLine("Manual update trigger received. Checking update immediately...");
-                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient);
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, httpClient);
                     }
 
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
@@ -654,7 +551,7 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
                 if (msg.ForceCheckUpdate)
                 {
                     Console.WriteLine("Manual update trigger received via WebSocket. Checking update immediately...");
-                    await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+                    await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
                 }
             }
 
@@ -864,13 +761,6 @@ static string NormalizeArgKey(string value)
     return value.Trim().TrimStart('-').TrimStart('-');
 }
 
-static string QuoteArg(string value)
-{
-    if (string.IsNullOrEmpty(value)) return "\"\"";
-    if (!value.Any(char.IsWhiteSpace) && !value.Contains('"')) return value;
-    return "\"" + value.Replace("\"", "\\\"") + "\"";
-}
-
 static ClientLocalState LoadClientState(string path)
 {
     try
@@ -896,6 +786,53 @@ static void SaveClientState(string path, ClientLocalState state)
     {
         // 忽略本地持久化失败
     }
+}
+
+static void CleanupOldFiles()
+{
+    try
+    {
+        var baseDir = AppContext.BaseDirectory;
+        foreach (var file in Directory.GetFiles(baseDir, "*.bak", SearchOption.TopDirectoryOnly))
+        {
+            TryDeleteFile(file);
+        }
+
+        var updateTemp = Path.Combine(baseDir, "UpdateTemp");
+        TryDeleteDirectory(updateTemp);
+
+        var tempDir = Path.GetTempPath();
+        foreach (var bat in Directory.GetFiles(tempDir, "cfspeedtest-restart-*.bat", SearchOption.TopDirectoryOnly))
+        {
+            TryDeleteFile(bat);
+        }
+    }
+    catch
+    {
+        // ignored
+    }
+}
+
+static async Task ApplyUpdateInPlaceAsync(string stagingDir, string targetDir)
+{
+    foreach (var sourceFile in Directory.GetFiles(stagingDir, "*", SearchOption.AllDirectories))
+    {
+        var relativePath = Path.GetRelativePath(stagingDir, sourceFile);
+        var destinationFile = Path.Combine(targetDir, relativePath);
+        var destinationDir = Path.GetDirectoryName(destinationFile)!;
+        Directory.CreateDirectory(destinationDir);
+
+        if (File.Exists(destinationFile))
+        {
+            var bakFile = destinationFile + ".bak";
+            TryDeleteFile(bakFile);
+            File.Move(destinationFile, bakFile);
+        }
+
+        File.Move(sourceFile, destinationFile);
+    }
+
+    await Task.CompletedTask;
 }
 
 static void TryDeleteDirectory(string? path)

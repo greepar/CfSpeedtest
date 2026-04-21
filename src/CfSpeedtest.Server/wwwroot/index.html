@@ -34,6 +34,8 @@ body {
 }
 .header h1 { font-size: 20px; font-weight: 600; }
 .header .dot { width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block; }
+.header .spacer { flex: 1; }
+.auth-user { font-size: 13px; color: var(--text2); }
 
 .tabs {
     display: flex;
@@ -205,6 +207,28 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 .danger-btn:hover {
     background: #dc2626;
 }
+.login-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 10, 16, .82);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+.login-overlay.active { display: flex; }
+.login-card {
+    width: min(420px, calc(100vw - 32px));
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 20px 80px rgba(0, 0, 0, .45);
+}
+.login-card h2 { color: var(--accent); margin-bottom: 10px; }
+.login-card p { font-size: 13px; color: var(--text2); margin-bottom: 16px; }
+.muted-note { font-size: 12px; color: var(--text2); margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -212,6 +236,29 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 <div class="header">
     <span class="dot"></span>
     <h1>Cloudflare IP SpeedTest</h1>
+    <div class="spacer"></div>
+    <div id="auth-user" class="auth-user"></div>
+    <button id="logout-btn" class="btn btn-secondary" style="display:none;" onclick="logout()">退出登录</button>
+</div>
+
+<div id="login-overlay" class="login-overlay">
+    <div class="login-card">
+        <h2>管理后台登录</h2>
+        <p>请输入 WebUI 管理账号和密码。</p>
+        <div class="form-group">
+            <label>用户名</label>
+            <input id="login-username" autocomplete="username" />
+        </div>
+        <div class="form-group">
+            <label>密码</label>
+            <input id="login-password" type="password" autocomplete="current-password" />
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button class="btn btn-primary" onclick="login()">登录</button>
+            <span id="login-status" class="muted-note"></span>
+        </div>
+        <div class="muted-note">首次默认账号通常为 <span style="font-family:monospace;">admin</span>，密码 <span style="font-family:monospace;">admin123456</span>，登录后请立即修改。</div>
+    </div>
 </div>
 
 <div class="tabs main-tabs">
@@ -262,9 +309,10 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             </div>
 
             <div style="border-top:1px solid var(--border); padding-top:12px;">
-                <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">预生成 clientId / 客户端启动参数生成</h3>
+                <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">一键安装模式</h3>
                 <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
-                    这里就是预生成 clientId 的地方。选择运营商、名称和服务端地址后，点击“生成并加入允许列表”，下方会直接显示生成出来的 clientId 和完整启动命令。
+                    这里会根据服务端地址、clientId、运营商和客户端名称，自动生成类似 <span style="font-family:monospace;">wget | bash</span> 的一键安装命令。
+                    安装脚本本体来自 GitHub Release 资产，Linux 使用 <span style="font-family:monospace;">systemd</span>，macOS 使用 <span style="font-family:monospace;">launchd</span>，Windows 使用开机自启动计划任务。
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -295,9 +343,27 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; margin-bottom:8px;">
                     <button class="btn btn-primary" onclick="reserveClientId()">生成并加入允许列表</button>
-                    <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制启动命令</button>
+                    <button class="btn btn-secondary" type="button" onclick="copyInstallOneLiner()">复制一键安装命令</button>
                 </div>
-                <div id="reserved-client-command" data-command="" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
+                <div>
+                    <div style="display:flex; gap:8px; margin-bottom:12px;">
+                        <div id="install-tab-linux" class="tab active" onclick="switchInstallScriptPlatform('linux')">Linux</div>
+                        <div id="install-tab-macos" class="tab" onclick="switchInstallScriptPlatform('macos')">macOS</div>
+                        <div id="install-tab-windows" class="tab" onclick="switchInstallScriptPlatform('windows')">Windows</div>
+                    </div>
+                    <div id="install-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备脚本...</div>
+                    <div id="install-script-oneliner" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
+                    <button class="btn btn-secondary" type="button" onclick="refreshInstallScript()">刷新命令</button>
+                </div>
+
+                <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
+                    <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">手动模式 / 无自动安装</h3>
+                    <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
+                        这里是纯手动启动模式。选择运营商、名称和服务端地址后，点击“生成并加入允许列表”，下方会显示生成出来的 clientId 和手动启动命令。
+                    </div>
+                    <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制手动启动命令</button>
+                    <div id="reserved-client-command" data-command="" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
+                </div>
             </div>
         </div>
         <div id="clients-list"></div>
@@ -587,6 +653,33 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             <button type="submit" class="btn btn-primary" style="margin-top:12px;">保存全局配置</button>
         </form>
     </div>
+    <div class="card">
+        <h2>登录管理</h2>
+        <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
+            修改 WebUI 登录用户名和密码。保存后当前所有登录会话会失效，需要重新登录。
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>当前用户名</label>
+                <input id="auth-current-username" readonly />
+            </div>
+            <div class="form-group">
+                <label>新用户名</label>
+                <input id="auth-new-username" autocomplete="username" />
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>当前密码</label>
+                <input id="auth-current-password" type="password" autocomplete="current-password" />
+            </div>
+            <div class="form-group">
+                <label>新密码</label>
+                <input id="auth-new-password" type="password" autocomplete="new-password" />
+            </div>
+        </div>
+        <button class="btn btn-primary" type="button" onclick="changePassword()">更新登录凭据</button>
+    </div>
 </div>
 
 </div>
@@ -601,6 +694,7 @@ let serverConfigData = null;
 let roundStatusData = null;
 let roundCountdownTimer = null;
 let roundRefreshTimer = null;
+let authStatus = null;
 
 // ========== Tab switching ==========
 
@@ -642,9 +736,15 @@ function toast(msg, ok) {
 
 function api(path, method, body) {
     if (!method) method = 'GET';
-    var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+    var opts = { method: method, headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' };
     if (body) opts.body = JSON.stringify(body);
-    return fetch(path, opts).then(function(r) { return r.json(); });
+    return fetch(path, opts).then(function(r) {
+        if (r.status === 401) {
+            showLoginOverlay(true);
+            throw new Error('Unauthorized');
+        }
+        return r.json();
+    });
 }
 
 function fmtTime(s) {
@@ -652,6 +752,114 @@ function fmtTime(s) {
     var d = new Date(s);
     if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '-';
     return d.toLocaleString('zh-CN');
+}
+
+function showLoginOverlay(show) {
+    var overlay = document.getElementById('login-overlay');
+    if (!overlay) return;
+    overlay.classList.toggle('active', !!show);
+}
+
+function updateAuthUi() {
+    var userEl = document.getElementById('auth-user');
+    var logoutBtn = document.getElementById('logout-btn');
+    var currentUsernameEl = document.getElementById('auth-current-username');
+    var newUsernameEl = document.getElementById('auth-new-username');
+    if (!userEl || !logoutBtn) return;
+
+    if (authStatus && authStatus.authenticated) {
+        userEl.textContent = '已登录: ' + (authStatus.username || '-');
+        logoutBtn.style.display = '';
+        showLoginOverlay(false);
+    } else {
+        userEl.textContent = '';
+        logoutBtn.style.display = 'none';
+    }
+
+    if (currentUsernameEl) currentUsernameEl.value = authStatus && authStatus.username ? authStatus.username : '';
+    if (newUsernameEl && !newUsernameEl.value && authStatus && authStatus.username) newUsernameEl.value = authStatus.username;
+}
+
+function checkAuth() {
+    return fetch('/api/auth/status', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            authStatus = r.data || null;
+            updateAuthUi();
+            if (!authStatus || !authStatus.authenticated) {
+                showLoginOverlay(true);
+                return false;
+            }
+            return true;
+        }).catch(function() {
+            showLoginOverlay(true);
+            return false;
+        });
+}
+
+function login() {
+    var username = document.getElementById('login-username').value.trim();
+    var password = document.getElementById('login-password').value;
+    var statusEl = document.getElementById('login-status');
+    statusEl.textContent = '登录中...';
+
+    fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ username: username, password: password })
+    }).then(function(r) { return r.json(); }).then(function(r) {
+        if (!r.success || !r.data || !r.data.authenticated) {
+            statusEl.textContent = r.message || '登录失败';
+            return;
+        }
+
+        authStatus = r.data;
+        document.getElementById('login-password').value = '';
+        statusEl.textContent = '';
+        updateAuthUi();
+        loadDashboard();
+        toast('登录成功');
+    }).catch(function(err) {
+        statusEl.textContent = err.message || '登录失败';
+    });
+}
+
+function logout() {
+    api('/api/auth/logout', 'POST').then(function() {
+        authStatus = null;
+        updateAuthUi();
+        showLoginOverlay(true);
+        toast('已退出登录');
+    }).catch(function() {
+        authStatus = null;
+        updateAuthUi();
+        showLoginOverlay(true);
+    });
+}
+
+function changePassword() {
+    var currentPassword = document.getElementById('auth-current-password').value;
+    var newUsername = document.getElementById('auth-new-username').value.trim();
+    var newPassword = document.getElementById('auth-new-password').value;
+
+    api('/api/auth/change-password', 'POST', {
+        currentPassword: currentPassword,
+        newUsername: newUsername,
+        newPassword: newPassword
+    }).then(function(r) {
+        if (!r.success) {
+            toast(r.message || '更新失败', false);
+            return;
+        }
+
+        document.getElementById('auth-current-password').value = '';
+        document.getElementById('auth-new-password').value = '';
+        authStatus = null;
+        updateAuthUi();
+        showLoginOverlay(true);
+        toast(r.message || '登录凭据已更新，请重新登录');
+    });
 }
 
 // ========== Dashboard ==========
@@ -892,6 +1100,118 @@ function syncClientCommandGenerator() {
     if (!serverInput.value) {
         serverInput.value = window.location.origin;
     }
+    ['reserve-client-server', 'reserve-client-name', 'reserve-client-isp', 'reserved-client-id'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el && !el.dataset.installScriptBound) {
+            el.addEventListener('input', refreshInstallScript);
+            el.addEventListener('change', refreshInstallScript);
+            el.dataset.installScriptBound = '1';
+        }
+    });
+    refreshInstallScript();
+}
+
+var currentInstallScriptPlatform = 'linux';
+
+function switchInstallScriptPlatform(platform) {
+    currentInstallScriptPlatform = platform;
+    ['linux', 'macos', 'windows'].forEach(function(name) {
+        var el = document.getElementById('install-tab-' + name);
+        if (el) {
+            el.classList.toggle('active', name === platform);
+        }
+    });
+    refreshInstallScript();
+}
+
+function buildInstallScriptParams() {
+    var server = (document.getElementById('reserve-client-server').value.trim() || window.location.origin).replace(/\/$/, '');
+    var clientId = document.getElementById('reserved-client-id').value.trim() || 'CHANGE_ME_CLIENT_ID';
+    var isp = document.getElementById('reserve-client-isp').value || 'Telecom';
+    var name = document.getElementById('reserve-client-name').value.trim() || (isp + '-' + clientId.substring(0, 8));
+
+    return {
+        platform: currentInstallScriptPlatform,
+        serverUrl: server,
+        clientId: clientId,
+        isp: isp,
+        name: name
+    };
+}
+
+function buildInstallScriptUrl(params) {
+    if (!serverConfigData) return '';
+    var repo = (serverConfigData.clientUpdateRepository || '').trim();
+    var tag = (serverConfigData.clientUpdateReleaseTag || '').trim();
+    if (!repo || !tag) return '';
+
+    var fileName = currentInstallScriptPlatform === 'windows'
+        ? 'install-cfspeedtest-client-windows.ps1'
+        : (currentInstallScriptPlatform === 'macos' ? 'install-cfspeedtest-client-macos.sh' : 'install-cfspeedtest-client-linux.sh');
+
+    var rawUrl = 'https://github.com/' + repo + '/releases/download/' + tag + '/' + fileName;
+    var proxy = (serverConfigData.clientUpdateGhProxyPrefix || '').trim();
+    return proxy ? proxy.replace(/\/$/, '') + '/' + rawUrl : rawUrl;
+}
+
+function buildInstallOneLiner(url, params) {
+    if (!url) return '';
+
+    var suffix = [];
+    suffix.push('--server ' + shellQuote(params.serverUrl));
+    suffix.push('--client-id ' + shellQuote(params.clientId));
+    suffix.push('--isp ' + shellQuote(params.isp));
+    suffix.push('--name ' + shellQuote(params.name));
+    suffix.push('--repository ' + shellQuote((serverConfigData.clientUpdateRepository || '').trim()));
+    suffix.push('--release-tag ' + shellQuote((serverConfigData.clientUpdateReleaseTag || '').trim()));
+    if ((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
+        suffix.push('--gh-proxy-prefix ' + shellQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
+    }
+
+    if (currentInstallScriptPlatform === 'windows') {
+        return 'powershell -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP \'install-cfspeedtest-client.ps1\'; irm \'' +
+            url.replace(/'/g, "''") +
+            '\' -OutFile $tmp; & powershell -ExecutionPolicy Bypass -File $tmp ' +
+            suffix.map(function(x) { return x.replace(/'/g, "''"); }).join(' ') +
+            '"';
+    }
+
+    return 'wget -qO- "' + url + '" | sudo bash -s -- ' + suffix.join(' ');
+}
+
+function shellQuote(value) {
+    return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
+}
+
+function refreshInstallScript() {
+    var metaEl = document.getElementById('install-script-meta');
+    var oneLinerEl = document.getElementById('install-script-oneliner');
+    if (!metaEl || !oneLinerEl) return;
+
+    var params = buildInstallScriptParams();
+    var scriptUrl = buildInstallScriptUrl(params);
+    var oneLiner = buildInstallOneLiner(scriptUrl, params);
+    metaEl.textContent = '正在生成 ' + params.platform + ' 一键安装命令...';
+    oneLinerEl.textContent = oneLiner;
+    oneLinerEl.dataset.command = oneLiner;
+
+    if (!scriptUrl) {
+        metaEl.textContent = '请先在配置页填写 GitHub 仓库和 Release Tag';
+        oneLinerEl.textContent = '';
+        oneLinerEl.dataset.command = '';
+        return;
+    }
+
+    var serviceKind = currentInstallScriptPlatform === 'windows' ? 'scheduled-task' : (currentInstallScriptPlatform === 'macos' ? 'launchd' : 'systemd');
+    var fileName = currentInstallScriptPlatform === 'windows'
+        ? 'install-cfspeedtest-client-windows.ps1'
+        : (currentInstallScriptPlatform === 'macos' ? 'install-cfspeedtest-client-macos.sh' : 'install-cfspeedtest-client-linux.sh');
+
+    metaEl.innerHTML =
+        '脚本来源: <span style="font-family:monospace;">GitHub Release</span> &nbsp; ' +
+        '服务托管: <span style="font-family:monospace;">' + serviceKind + '</span> &nbsp; ' +
+        '文件名: <span style="font-family:monospace;">' + fileName + '</span> &nbsp; ' +
+        '脚本地址: <span style="font-family:monospace;">' + escapeHtml(scriptUrl) + '</span>';
 }
 
 function saveClientWhitelistOnly() {
@@ -918,11 +1238,13 @@ function reserveClientId() {
         var command = 'CfSpeedtest.Client.exe --server ' + server +
             ' --client-id ' + clientId +
             ' --isp ' + isp +
-            (name ? ' --name ' + name : '');
+            (name ? ' --name ' + name : '') +
+            ' --disable-auto-update';
         document.getElementById('reserved-client-id').value = clientId;
         var commandEl = document.getElementById('reserved-client-command');
         commandEl.dataset.command = command;
         commandEl.textContent = '启动命令示例: ' + command;
+        refreshInstallScript();
         toast('clientId 已生成并加入允许列表');
         loadClients();
     });
@@ -944,6 +1266,15 @@ function copyReservedClientCommand() {
         return;
     }
     copyTextToClipboard(command, '启动命令已复制');
+}
+
+function copyInstallOneLiner() {
+    var command = (document.getElementById('install-script-oneliner').dataset.command || '').trim();
+    if (!command) {
+        toast('当前没有可复制的一键安装命令', false);
+        return;
+    }
+    copyTextToClipboard(command, '一键安装命令已复制');
 }
 
 function copyTextToClipboard(text, successMessage) {
@@ -1310,6 +1641,10 @@ function loadConfig() {
         document.getElementById('cfg-client-update-tag').value = c.clientUpdateReleaseTag || '';
         document.getElementById('cfg-client-update-proxy').value = c.clientUpdateGhProxyPrefix || '';
         syncClientUpdateSourceMode();
+        if (c.webUiAuth) {
+            document.getElementById('auth-current-username').value = c.webUiAuth.username || '';
+            document.getElementById('auth-new-username').value = c.webUiAuth.username || '';
+        }
         var clientWhitelist = document.getElementById('client-whitelist-only');
         if (clientWhitelist) {
             clientWhitelist.value = c.clientWhitelistOnly ? 'true' : 'false';
@@ -1570,7 +1905,12 @@ function renderDnsStatus(statusList) {
 }
 
 // ========== Init ==========
-loadDashboard();
+document.getElementById('login-password').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') login();
+});
+checkAuth().then(function(ok) {
+    if (ok) loadDashboard();
+});
 </script>
 </body>
 </html>

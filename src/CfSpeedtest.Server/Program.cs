@@ -22,9 +22,33 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DnsUpdateService>(
 builder.Services.AddSingleton<RoundCoordinatorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundCoordinatorService>());
 builder.Services.AddSingleton<ClientWsHub>();
+builder.Services.AddSingleton<WebUiAuthService>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
+app.Services.GetRequiredService<WebUiAuthService>().EnsureInitialized(app.Services.GetRequiredService<DataStore>());
+
+app.Use(async (context, next) =>
+{
+    if (!RequiresWebUiAuth(context.Request.Path))
+    {
+        await next();
+        return;
+    }
+
+    var auth = context.RequestServices.GetRequiredService<WebUiAuthService>();
+    var store = context.RequestServices.GetRequiredService<DataStore>();
+    if (auth.TryAuthenticate(context, store, out var username))
+    {
+        context.Items["webui_username"] = username;
+        await next();
+        return;
+    }
+
+    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+    context.Response.ContentType = "application/json; charset=utf-8";
+    await context.Response.WriteAsJsonAsync(ApiResponse<string>.Fail("Unauthorized"), AppJsonContext.Default.ApiResponseString);
+});
 
 app.UseWebSockets();
 app.UseDefaultFiles();
@@ -347,6 +371,63 @@ app.MapGet("/api/client/update/overview", (DataStore store) =>
         LocalDirectory = clientUpdatesDir,
         Packages = packages,
     });
+});
+
+app.MapGet("/api/auth/status", (HttpContext http, DataStore store, WebUiAuthService auth) =>
+{
+    var ok = auth.TryAuthenticate(http, store, out var username);
+    var conf = store.GetConfig().WebUiAuth;
+    return ApiResponse<WebUiAuthStatus>.Ok(new WebUiAuthStatus
+    {
+        Enabled = conf.Enabled,
+        Authenticated = ok,
+        Username = ok ? username : string.Empty
+    });
+});
+
+app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataStore store, WebUiAuthService auth) =>
+{
+    var conf = store.GetConfig().WebUiAuth;
+    if (!conf.Enabled)
+    {
+        return ApiResponse<WebUiAuthStatus>.Ok(new WebUiAuthStatus
+        {
+            Enabled = false,
+            Authenticated = true,
+            Username = conf.Username
+        });
+    }
+
+    if (!auth.ValidateLogin(store, req.Username, req.Password))
+        return ApiResponse<WebUiAuthStatus>.Fail("用户名或密码错误");
+
+    var token = auth.CreateSession(conf.Username);
+    auth.SignIn(http, token);
+    return ApiResponse<WebUiAuthStatus>.Ok(new WebUiAuthStatus
+    {
+        Enabled = true,
+        Authenticated = true,
+        Username = conf.Username
+    });
+});
+
+app.MapPost("/api/auth/logout", (HttpContext http, WebUiAuthService auth) =>
+{
+    auth.SignOut(http);
+    return ApiResponse<string>.Ok("Logged out");
+});
+
+app.MapPost("/api/auth/change-password", (WebUiChangePasswordRequest req, DataStore store, WebUiAuthService auth) =>
+{
+    if (string.IsNullOrWhiteSpace(req.NewUsername) || string.IsNullOrWhiteSpace(req.NewPassword))
+        return ApiResponse<string>.Fail("用户名和新密码不能为空");
+    if (req.NewPassword.Length < 8)
+        return ApiResponse<string>.Fail("新密码长度至少 8 位");
+
+    var changed = auth.ChangeCredentials(store, req.CurrentPassword, req.NewUsername, req.NewPassword);
+    return changed
+        ? ApiResponse<string>.Ok("登录凭据已更新，请重新登录")
+        : ApiResponse<string>.Fail("当前密码错误或新凭据无效");
 });
 
 app.MapPost("/api/clients/{clientId}/trigger-update", (string clientId, DataStore store, RoundCoordinatorService rounds) =>
@@ -680,4 +761,25 @@ static string GetClientUpdateFileName(string platform)
 static string CombineProxyUrl(string proxyPrefix, string rawUrl)
 {
     return proxyPrefix.TrimEnd('/') + "/" + rawUrl;
+}
+
+static bool RequiresWebUiAuth(PathString path)
+{
+    var value = path.Value ?? string.Empty;
+    if (string.IsNullOrWhiteSpace(value) || value == "/" || value.Equals("/index.html", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    if (value.StartsWith("/api/auth/", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    if (value.StartsWith("/api/client/", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/api/task/", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("/api/report", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    if (value.StartsWith("/client-updates/", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/install/client/", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    return value.StartsWith("/api/", StringComparison.OrdinalIgnoreCase);
 }
