@@ -27,6 +27,8 @@ public class RoundCoordinatorService : BackgroundService
     private readonly ILogger<RoundCoordinatorService> _logger;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, RoundState> _rounds = new();
+    private readonly HashSet<string> _manualTriggeredIsps = [];
+    private readonly HashSet<string> _manualUpdateClients = [];
 
     public RoundCoordinatorService(
         DataStore store,
@@ -43,11 +45,14 @@ public class RoundCoordinatorService : BackgroundService
     public (string TaskId, DateTime ScheduledAtUtc) RegisterClient(IspType isp, string clientId)
     {
         var config = _store.GetConfig();
-        var startAtUtc = GetNextRoundStartUtc(DateTime.UtcNow, config.ClientIntervalMinutes);
         var ispKey = isp.ToString();
 
         lock (_lock)
         {
+            var startAtUtc = _manualTriggeredIsps.Remove(ispKey)
+                ? DateTime.UtcNow.AddSeconds(2)
+                : GetNextRoundStartUtc(DateTime.UtcNow, config.ClientIntervalMinutes);
+
             if (!_rounds.TryGetValue(ispKey, out var state) || state.StartAtUtc != startAtUtc)
             {
                 state = new RoundState
@@ -63,6 +68,45 @@ public class RoundCoordinatorService : BackgroundService
 
             state.AssignedClients.Add(clientId);
             return (state.TaskId, state.StartAtUtc);
+        }
+    }
+
+    public void TriggerImmediateRound(string? ispFilter)
+    {
+        lock (_lock)
+        {
+            var isps = string.IsNullOrWhiteSpace(ispFilter)
+                ? new[] { "Telecom", "Unicom", "Mobile" }
+                : new[] { ispFilter };
+
+            foreach (var isp in isps)
+            {
+                _manualTriggeredIsps.Add(isp);
+            }
+        }
+    }
+
+    public bool ConsumeImmediateTrigger(IspType isp)
+    {
+        lock (_lock)
+        {
+            return _manualTriggeredIsps.Remove(isp.ToString());
+        }
+    }
+
+    public void TriggerClientUpdate(string clientId)
+    {
+        lock (_lock)
+        {
+            _manualUpdateClients.Add(clientId);
+        }
+    }
+
+    public bool ConsumeClientUpdateTrigger(string clientId)
+    {
+        lock (_lock)
+        {
+            return _manualUpdateClients.Remove(clientId);
         }
     }
 

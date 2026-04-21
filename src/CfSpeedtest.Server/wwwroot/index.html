@@ -262,9 +262,9 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             </div>
 
             <div style="border-top:1px solid var(--border); padding-top:12px;">
-                <h3 style="margin:0 0 10px; color:var(--text); font-size:14px;">客户端启动参数生成</h3>
+                <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">预生成 clientId / 客户端启动参数生成</h3>
                 <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
-                    选择运营商、名称和服务端地址后，生成允许连接的 clientId，并直接得到完整启动命令。
+                    这里就是预生成 clientId 的地方。选择运营商、名称和服务端地址后，点击“生成并加入允许列表”，下方会直接显示生成出来的 clientId 和完整启动命令。
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -287,13 +287,17 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     </div>
                     <div class="form-group">
                         <label>预生成 clientId</label>
-                        <input id="reserved-client-id" readonly placeholder="生成后的 clientId 会显示在这里" />
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input id="reserved-client-id" readonly placeholder="生成后的 clientId 会显示在这里" />
+                            <button class="btn btn-secondary" type="button" onclick="copyReservedClientId()">复制</button>
+                        </div>
                     </div>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; margin-bottom:8px;">
                     <button class="btn btn-primary" onclick="reserveClientId()">生成并加入允许列表</button>
+                    <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制启动命令</button>
                 </div>
-                <div id="reserved-client-command" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
+                <div id="reserved-client-command" data-command="" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
             </div>
         </div>
         <div id="clients-list"></div>
@@ -547,16 +551,36 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             </div>
             <div class="form-row">
                 <div class="form-group">
+                    <label>客户端更新源</label>
+                    <select id="cfg-client-update-source-type" style="width:auto;" onchange="syncClientUpdateSourceMode()">
+                        <option value="github">GitHub Release</option>
+                        <option value="local">服务端本地文件</option>
+                    </select>
+                </div>
+                <div class="form-group"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
                     <label>最新客户端版本号</label>
                     <input id="cfg-latest-client-version" placeholder="如: 1.0.1" />
                 </div>
                 <div class="form-group">
-                    <label>更新包投放目录</label>
-                    <input value="server/client-updates/ (手动放入更新文件)" readonly />
+                    <label>GitHub 仓库</label>
+                    <input id="cfg-client-update-repo" placeholder="如: greepar/CfSpeedtest" />
+                </div>
+            </div>
+            <div class="form-row client-update-github-fields">
+                <div class="form-group">
+                    <label>GitHub Release Tag</label>
+                    <input id="cfg-client-update-tag" placeholder="如: v1.0 或 v1.x" />
+                </div>
+                <div class="form-group">
+                    <label>GH Proxy 前缀（可选）</label>
+                    <input id="cfg-client-update-proxy" placeholder="如: https://ghproxy.com/" />
                 </div>
             </div>
             <div style="background:var(--bg); padding:12px 14px; border-radius:8px; border:1px solid var(--border); margin-top:12px;">
-                <div style="font-size:13px; color:var(--text); margin-bottom:8px;">客户端更新包状态</div>
+                <div style="font-size:13px; color:var(--text); margin-bottom:8px;">客户端更新说明</div>
                 <div id="client-update-overview" style="font-size:12px; color:var(--text2);">正在加载...</div>
             </div>
 
@@ -851,7 +875,10 @@ function loadClients() {
                 '<td><button class="btn ' + (allowed ? 'btn-secondary' : 'danger-btn') + '" onclick="toggleClientAllowed(this)" data-client-id="' + escapeHtmlAttr(c.clientId) + '" data-allowed="' + nextAllowed + '">' + allowLabel + '</button></td>' +
                 '<td>' + fmtTime(c.registeredAt) + '</td>' +
                 '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
-                '<td><button class="btn danger-btn btn-icon" onclick="deleteClient(\'' + c.clientId.replace(/'/g, "\\'") + '\')">X</button></td>' +
+                '<td style="display:flex; gap:6px;">' +
+                '<button class="btn btn-secondary" onclick="triggerClientUpdate(\'' + c.clientId.replace(/'/g, "\\'") + '\')">触发更新</button>' +
+                '<button class="btn danger-btn btn-icon" onclick="deleteClient(\'' + c.clientId.replace(/'/g, "\\'") + '\')">X</button>' +
+                '</td>' +
                 '</tr>';
         });
         html += '</tbody></table>';
@@ -888,15 +915,62 @@ function reserveClientId() {
         }
 
         var clientId = r.data.clientId;
-        document.getElementById('reserved-client-id').value = clientId;
-        document.getElementById('reserved-client-command').textContent =
-            '启动命令示例: CfSpeedtest.Client.exe --server ' + server +
+        var command = 'CfSpeedtest.Client.exe --server ' + server +
             ' --client-id ' + clientId +
             ' --isp ' + isp +
             (name ? ' --name ' + name : '');
+        document.getElementById('reserved-client-id').value = clientId;
+        var commandEl = document.getElementById('reserved-client-command');
+        commandEl.dataset.command = command;
+        commandEl.textContent = '启动命令示例: ' + command;
         toast('clientId 已生成并加入允许列表');
         loadClients();
     });
+}
+
+function copyReservedClientId() {
+    var value = document.getElementById('reserved-client-id').value;
+    if (!value) {
+        toast('还没有生成 clientId', false);
+        return;
+    }
+    copyTextToClipboard(value, 'clientId 已复制');
+}
+
+function copyReservedClientCommand() {
+    var command = document.getElementById('reserved-client-command').dataset.command || '';
+    if (!command) {
+        toast('还没有生成启动命令', false);
+        return;
+    }
+    copyTextToClipboard(command, '启动命令已复制');
+}
+
+function copyTextToClipboard(text, successMessage) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+            toast(successMessage || '已复制');
+        }).catch(function() {
+            fallbackCopyText(text, successMessage);
+        });
+        return;
+    }
+    fallbackCopyText(text, successMessage);
+}
+
+function fallbackCopyText(text, successMessage) {
+    var input = document.createElement('textarea');
+    input.value = text;
+    document.body.appendChild(input);
+    input.select();
+    try {
+        document.execCommand('copy');
+        toast(successMessage || '已复制');
+    } catch (e) {
+        toast('复制失败，请手动复制', false);
+    } finally {
+        document.body.removeChild(input);
+    }
 }
 
 function toggleClientAllowed(btn) {
@@ -934,6 +1008,16 @@ function deleteClient(clientId) {
             loadClients();
         } else {
             toast(r.message || '删除失败', false);
+        }
+    });
+}
+
+function triggerClientUpdate(clientId) {
+    api('/api/clients/' + encodeURIComponent(clientId) + '/trigger-update', 'POST').then(function(r) {
+        if (r.success) {
+            toast(r.message || '已下发更新检查触发');
+        } else {
+            toast(r.message || '触发失败', false);
         }
     });
 }
@@ -1220,10 +1304,12 @@ function loadConfig() {
         document.getElementById('cfg-heartbeat-interval').value = c.heartbeatIntervalSeconds || 30;
         document.getElementById('cfg-client-whitelist-only').value = c.clientWhitelistOnly ? 'true' : 'false';
         document.getElementById('cfg-client-update-enabled').value = c.clientUpdateEnabled ? 'true' : 'false';
+        document.getElementById('cfg-client-update-source-type').value = c.clientUpdateSourceType || 'github';
         document.getElementById('cfg-latest-client-version').value = c.latestClientVersion || '';
         document.getElementById('cfg-client-update-repo').value = c.clientUpdateRepository || '';
         document.getElementById('cfg-client-update-tag').value = c.clientUpdateReleaseTag || '';
         document.getElementById('cfg-client-update-proxy').value = c.clientUpdateGhProxyPrefix || '';
+        syncClientUpdateSourceMode();
         var clientWhitelist = document.getElementById('client-whitelist-only');
         if (clientWhitelist) {
             clientWhitelist.value = c.clientWhitelistOnly ? 'true' : 'false';
@@ -1244,9 +1330,14 @@ function loadClientUpdateOverview() {
 
         var d = r.data;
         var html = '';
-        html += '<div style="margin-bottom:6px;">GitHub 仓库: <span style="font-family:monospace;">' + escapeHtml(d.repository || '-') + '</span></div>';
-        html += '<div style="margin-bottom:6px;">Release Tag: <span style="font-family:monospace;">' + escapeHtml(d.releaseTag || '-') + '</span></div>';
-        html += '<div style="margin-bottom:6px;">GH Proxy 前缀: <span style="font-family:monospace;">' + escapeHtml(d.ghProxyPrefix || '-') + '</span></div>';
+        html += '<div style="margin-bottom:6px;">更新源类型: <span style="font-family:monospace;">' + escapeHtml(d.sourceType || '-') + '</span></div>';
+        if ((d.sourceType || 'github') === 'github') {
+            html += '<div style="margin-bottom:6px;">GitHub 仓库: <span style="font-family:monospace;">' + escapeHtml(d.repository || '-') + '</span></div>';
+            html += '<div style="margin-bottom:6px;">Release Tag: <span style="font-family:monospace;">' + escapeHtml(d.releaseTag || '-') + '</span></div>';
+            html += '<div style="margin-bottom:6px;">GH Proxy 前缀: <span style="font-family:monospace;">' + escapeHtml(d.ghProxyPrefix || '-') + '</span></div>';
+        } else {
+            html += '<div style="margin-bottom:6px;">本地目录: <span style="font-family:monospace;">' + escapeHtml(d.localDirectory || '-') + '</span></div>';
+        }
         html += '<div style="margin-bottom:8px;">命名规则: <span style="font-family:monospace;">CfSpeedtest.Client-{platform}-{version}.zip</span></div>';
         html += '<div style="margin-bottom:8px;">当前配置: 最新版本 <strong>' + escapeHtml(d.latestVersion || '-') + '</strong>，自动更新 ' + (d.enabled ? '已启用' : '未启用') + '</div>';
         html += '<table style="margin:0;"><thead><tr><th>平台</th><th>文件名</th><th>下载地址</th></tr></thead><tbody>';
@@ -1280,6 +1371,7 @@ function saveConfig(e) {
     serverConfigData.heartbeatIntervalSeconds = parseInt(document.getElementById('cfg-heartbeat-interval').value) || 30;
     serverConfigData.clientWhitelistOnly = document.getElementById('cfg-client-whitelist-only').value === 'true';
     serverConfigData.clientUpdateEnabled = document.getElementById('cfg-client-update-enabled').value === 'true';
+    serverConfigData.clientUpdateSourceType = document.getElementById('cfg-client-update-source-type').value;
     serverConfigData.latestClientVersion = document.getElementById('cfg-latest-client-version').value.trim();
     serverConfigData.clientUpdateRepository = document.getElementById('cfg-client-update-repo').value.trim();
     serverConfigData.clientUpdateReleaseTag = document.getElementById('cfg-client-update-tag').value.trim();
@@ -1288,6 +1380,13 @@ function saveConfig(e) {
     api('/api/config', 'POST', serverConfigData).then(function(r) {
         if (r.success) toast('全局配置已保存');
         else toast(r.message || '保存失败', false);
+    });
+}
+
+function syncClientUpdateSourceMode() {
+    var mode = document.getElementById('cfg-client-update-source-type').value;
+    document.querySelectorAll('.client-update-github-fields').forEach(function(el) {
+        el.style.display = mode === 'github' ? '' : 'none';
     });
 }
 
@@ -1397,6 +1496,21 @@ function triggerDnsUpdate(isp) {
             else toast(label + ' DNS 更新部分失败，请查看状态', false);
         } else {
             toast(r.message || 'DNS 更新失败', false);
+        }
+    }).catch(function(err) {
+        toast('网络错误: ' + err.message, false);
+    });
+}
+
+function triggerDnsTestAndUpdate(isp) {
+    var body = isp ? { isp: isp } : {};
+    var label = isp ? ISP_NAMES[isp] : '所有运营商';
+    toast('正在通知 ' + label + ' 在线客户端立即测速...');
+    api('/api/dns/trigger-test', 'POST', body).then(function(r) {
+        if (r.success) {
+            toast(r.message || (label + ' 测速触发已下发'));
+        } else {
+            toast(r.message || '测速触发失败', false);
         }
     }).catch(function(err) {
         toast('网络错误: ' + err.message, false);

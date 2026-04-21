@@ -158,6 +158,8 @@ public class ClientHeartbeatResponse
     public bool Success { get; set; }
     public string? Message { get; set; }
     public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public bool ForceFetchTask { get; set; }
+    public bool ForceCheckUpdate { get; set; }
 }
 
 /// <summary>
@@ -166,7 +168,7 @@ public class ClientHeartbeatResponse
 public class ClientReservationRequest
 {
     public string? ClientId { get; set; }
-    public IspType Isp { get; set; }
+    public string? Isp { get; set; }
     public string? Name { get; set; }
 }
 
@@ -205,9 +207,11 @@ public class ClientUpdateOverview
 {
     public bool Enabled { get; set; }
     public string LatestVersion { get; set; } = string.Empty;
+    public string SourceType { get; set; } = string.Empty;
     public string Repository { get; set; } = string.Empty;
     public string ReleaseTag { get; set; } = string.Empty;
     public string GhProxyPrefix { get; set; } = string.Empty;
+    public string LocalDirectory { get; set; } = string.Empty;
     public List<ClientUpdatePackageStatus> Packages { get; set; } = [];
 }
 
@@ -366,6 +370,9 @@ public class ServerConfig
 
     /// <summary>是否启用客户端版本检查和更新</summary>
     public bool ClientUpdateEnabled { get; set; }
+
+    /// <summary>客户端更新源类型：github 或 local</summary>
+    public string ClientUpdateSourceType { get; set; } = "github";
 
     /// <summary>服务端提供的最新客户端版本号</summary>
     public string LatestClientVersion { get; set; } = string.Empty;

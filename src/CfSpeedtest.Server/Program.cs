@@ -2,8 +2,11 @@ using System.Text.Json;
 using CfSpeedtest.Server.Services;
 using CfSpeedtest.Shared;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
+var clientUpdatesDir = Path.Combine(builder.Environment.ContentRootPath, "client-updates");
+Directory.CreateDirectory(clientUpdatesDir);
 
 builder.Services.Configure<JsonOptions>(o =>
 {
@@ -23,6 +26,11 @@ var app = builder.Build();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(clientUpdatesDir),
+    RequestPath = "/client-updates"
+});
 
 // ============================================================
 //  API: 客户端注册
@@ -71,7 +79,7 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
 // ============================================================
 //  API: 客户端心跳
 // ============================================================
-app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore store) =>
+app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore store, RoundCoordinatorService rounds) =>
 {
     if (string.IsNullOrWhiteSpace(req.ClientId))
         return ApiResponse<ClientHeartbeatResponse>.Fail("ClientId is required");
@@ -108,6 +116,8 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         Success = true,
         Message = "Heartbeat received",
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
+        ForceFetchTask = rounds.ConsumeImmediateTrigger(req.Isp),
+        ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(req.ClientId),
     });
 });
 
@@ -120,6 +130,7 @@ app.MapGet("/api/client/update", (HttpContext http, DataStore store, string vers
     var currentVersion = string.IsNullOrWhiteSpace(version) ? "0.0.0" : version.Trim();
     var latestVersion = string.IsNullOrWhiteSpace(config.LatestClientVersion) ? currentVersion : config.LatestClientVersion.Trim();
     var clientPlatform = string.IsNullOrWhiteSpace(platform) ? "win-x64" : platform.Trim();
+    var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
     var repository = config.ClientUpdateRepository.Trim();
     var releaseTag = config.ClientUpdateReleaseTag.Trim();
     var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
@@ -137,7 +148,7 @@ app.MapGet("/api/client/update", (HttpContext http, DataStore store, string vers
         });
     }
 
-    if (string.IsNullOrWhiteSpace(latestVersion) || string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    if (string.IsNullOrWhiteSpace(latestVersion))
     {
         return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
         {
@@ -146,16 +157,54 @@ app.MapGet("/api/client/update", (HttpContext http, DataStore store, string vers
             LatestVersion = latestVersion,
             Platform = clientPlatform,
             HasUpdate = false,
-            Message = "服务端未配置 GitHub Release 更新源"
+            Message = "服务端未配置最新客户端版本号"
         });
     }
 
     var hasUpdate = IsVersionNewer(latestVersion, currentVersion);
     var fileName = GetClientUpdateFileName(clientPlatform, latestVersion);
-    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
-    var downloadUrl = string.IsNullOrWhiteSpace(ghProxyPrefix)
-        ? rawUrl
-        : CombineProxyUrl(ghProxyPrefix, rawUrl);
+    string? downloadUrl = null;
+
+    if (sourceType == "local")
+    {
+        var packageFile = Path.Combine(clientUpdatesDir, fileName);
+        if (!File.Exists(packageFile))
+        {
+            return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
+            {
+                Enabled = true,
+                CurrentVersion = currentVersion,
+                LatestVersion = latestVersion,
+                Platform = clientPlatform,
+                HasUpdate = false,
+                Message = $"服务端本地更新目录缺少文件 {fileName}"
+            });
+        }
+
+        var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}";
+        downloadUrl = $"{baseUrl}/client-updates/{fileName}";
+    }
+    else
+    {
+        if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+        {
+            return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
+            {
+                Enabled = true,
+                CurrentVersion = currentVersion,
+                LatestVersion = latestVersion,
+                Platform = clientPlatform,
+                HasUpdate = false,
+                Message = "服务端未配置 GitHub Release 更新源"
+            });
+        }
+
+        var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
+        downloadUrl = string.IsNullOrWhiteSpace(ghProxyPrefix)
+            ? rawUrl
+            : CombineProxyUrl(ghProxyPrefix, rawUrl);
+    }
+
     return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
     {
         Enabled = true,
@@ -174,6 +223,7 @@ app.MapGet("/api/client/update/overview", (DataStore store) =>
     var config = store.GetConfig();
     var platforms = new[] { "win-x64", "linux-x64", "linux-musl-x64" };
     var packages = new List<ClientUpdatePackageStatus>();
+    var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
     var repository = config.ClientUpdateRepository.Trim();
     var releaseTag = config.ClientUpdateReleaseTag.Trim();
     var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
@@ -181,12 +231,21 @@ app.MapGet("/api/client/update/overview", (DataStore store) =>
     foreach (var platform in platforms)
     {
         var fileName = GetClientUpdateFileName(platform, config.LatestClientVersion);
-        var rawUrl = string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag)
-            ? string.Empty
-            : $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
-        var downloadUrl = string.IsNullOrWhiteSpace(rawUrl)
-            ? string.Empty
-            : (string.IsNullOrWhiteSpace(ghProxyPrefix) ? rawUrl : CombineProxyUrl(ghProxyPrefix, rawUrl));
+        string downloadUrl;
+        if (sourceType == "local")
+        {
+            var packageFile = Path.Combine(clientUpdatesDir, fileName);
+            downloadUrl = File.Exists(packageFile) ? $"/client-updates/{fileName}" : string.Empty;
+        }
+        else
+        {
+            var rawUrl = string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag)
+                ? string.Empty
+                : $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
+            downloadUrl = string.IsNullOrWhiteSpace(rawUrl)
+                ? string.Empty
+                : (string.IsNullOrWhiteSpace(ghProxyPrefix) ? rawUrl : CombineProxyUrl(ghProxyPrefix, rawUrl));
+        }
 
         packages.Add(new ClientUpdatePackageStatus
         {
@@ -200,11 +259,23 @@ app.MapGet("/api/client/update/overview", (DataStore store) =>
     {
         Enabled = config.ClientUpdateEnabled,
         LatestVersion = config.LatestClientVersion,
+        SourceType = sourceType,
         Repository = repository,
         ReleaseTag = releaseTag,
         GhProxyPrefix = ghProxyPrefix,
+        LocalDirectory = clientUpdatesDir,
         Packages = packages,
     });
+});
+
+app.MapPost("/api/clients/{clientId}/trigger-update", (string clientId, DataStore store, RoundCoordinatorService rounds) =>
+{
+    var client = store.GetClient(clientId);
+    if (client is null)
+        return ApiResponse<string>.Fail("Client not found");
+
+    rounds.TriggerClientUpdate(clientId);
+    return ApiResponse<string>.Ok("客户端将在下一次心跳后立即检查更新");
 });
 
 // ============================================================
@@ -341,6 +412,9 @@ app.MapGet("/api/clients", (DataStore store) =>
 // ============================================================
 app.MapPost("/api/clients/reserve", (ClientReservationRequest req, DataStore store) =>
 {
+    if (!Enum.TryParse<IspType>(req.Isp, out var isp))
+        return ApiResponse<ClientReservationResponse>.Fail("Invalid ISP");
+
     var clientId = string.IsNullOrWhiteSpace(req.ClientId)
         ? Guid.NewGuid().ToString("N")
         : req.ClientId.Trim();
@@ -351,8 +425,8 @@ app.MapPost("/api/clients/reserve", (ClientReservationRequest req, DataStore sto
     var info = new ClientInfo
     {
         ClientId = clientId,
-        Isp = req.Isp,
-        Name = string.IsNullOrWhiteSpace(req.Name) ? $"{req.Isp}-{clientId[..6]}" : req.Name,
+        Isp = isp,
+        Name = string.IsNullOrWhiteSpace(req.Name) ? $"{isp}-{clientId[..6]}" : req.Name,
         RegisteredAt = DateTime.UtcNow,
         LastSeenAt = DateTime.MinValue,
         IsOnline = false,
@@ -485,6 +559,12 @@ app.MapPost("/api/dns/update", async (DnsUpdateTriggerRequest? req, DnsUpdateSer
 {
     var results = await dns.ManualUpdateAsync(req?.Isp);
     return ApiResponse<List<DnsUpdateStatus>>.Ok(results);
+});
+
+app.MapPost("/api/dns/trigger-test", (DnsUpdateTriggerRequest? req, RoundCoordinatorService rounds) =>
+{
+    rounds.TriggerImmediateRound(req?.Isp);
+    return ApiResponse<string>.Ok("测速触发已下发，在线客户端将在下一次心跳后立即拉取任务并开始测速");
 });
 
 // ============================================================

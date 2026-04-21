@@ -104,7 +104,9 @@ catch (Exception ex)
 }
 
 using var heartbeatCts = new CancellationTokenSource();
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, heartbeatIntervalSeconds, heartbeatCts.Token);
+using var immediateFetchSignal = new SemaphoreSlim(0, 1);
+using var immediateUpdateSignal = new SemaphoreSlim(0, 1);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, immediateUpdateSignal, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -114,6 +116,7 @@ while (true)
 
     try
     {
+        await ConsumeManualUpdateSignalAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient, immediateUpdateSignal);
         var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, isp, httpClient, intervalMinutes);
 
         if (oneshot) break;
@@ -121,7 +124,7 @@ while (true)
         if (retryDelayMinutes > 0)
         {
             Console.WriteLine($"Sleeping {retryDelayMinutes}min before next check...");
-            await Task.Delay(TimeSpan.FromMinutes(retryDelayMinutes));
+            await WaitForNextCheckAsync(TimeSpan.FromMinutes(retryDelayMinutes), immediateFetchSignal);
         }
 
         continue;
@@ -133,7 +136,7 @@ while (true)
 
     if (oneshot) break;
     Console.WriteLine($"Sleeping {intervalMinutes}min before next check...");
-    await Task.Delay(TimeSpan.FromMinutes(intervalMinutes));
+    await WaitForNextCheckAsync(TimeSpan.FromMinutes(intervalMinutes), immediateFetchSignal);
 }
 
 heartbeatCts.Cancel();
@@ -376,6 +379,8 @@ static Task StartHeartbeatLoopAsync(
     string clientPlatform,
     HttpClient httpClient,
     int heartbeatIntervalSeconds,
+    SemaphoreSlim immediateFetchSignal,
+    SemaphoreSlim immediateUpdateSignal,
     CancellationToken cancellationToken)
 {
     return Task.Run(async () =>
@@ -406,6 +411,15 @@ static Task StartHeartbeatLoopAsync(
                 var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
+                    if (result.Data.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
+                    {
+                        immediateFetchSignal.Release();
+                    }
+                    if (result.Data.ForceCheckUpdate && immediateUpdateSignal.CurrentCount == 0)
+                    {
+                        immediateUpdateSignal.Release();
+                    }
+
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
                     if (nextIntervalSeconds != intervalSeconds)
                     {
@@ -426,9 +440,37 @@ static Task StartHeartbeatLoopAsync(
 
         if (!cancellationToken.IsCancellationRequested)
         {
-            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, intervalSeconds, cancellationToken);
+            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, httpClient, intervalSeconds, immediateFetchSignal, immediateUpdateSignal, cancellationToken);
         }
     }, cancellationToken);
+}
+
+static async Task ConsumeManualUpdateSignalAsync(
+    string serverUrl,
+    string currentVersion,
+    string clientPlatform,
+    bool autoUpdate,
+    HttpClient httpClient,
+    SemaphoreSlim immediateUpdateSignal)
+{
+    if (immediateUpdateSignal.CurrentCount == 0)
+        return;
+
+    await immediateUpdateSignal.WaitAsync();
+    Console.WriteLine("Manual update trigger received. Checking update immediately...");
+    await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, httpClient);
+}
+
+static async Task WaitForNextCheckAsync(TimeSpan delay, SemaphoreSlim immediateFetchSignal)
+{
+    var delayTask = Task.Delay(delay);
+    var signalTask = immediateFetchSignal.WaitAsync();
+    var completed = await Task.WhenAny(delayTask, signalTask);
+
+    if (completed == signalTask)
+    {
+        Console.WriteLine("Manual test trigger received. Fetching task immediately...");
+    }
 }
 
 // ============================================================
