@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsAotCompatible>true</IsAotCompatible>
-    <Version>1.4</Version>
+    <Version>1.5</Version>
   </PropertyGroup>
 
 </Project>

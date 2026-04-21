@@ -115,6 +115,7 @@ catch (Exception ex)
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
 var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
+var currentIntervalMinutes = Math.Max(1, intervalMinutes);
 
 // ===== 主循环 =====
 while (true)
@@ -124,14 +125,15 @@ while (true)
 
     try
     {
-        var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, httpClient, intervalMinutes);
+        var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, httpClient, currentIntervalMinutes);
+        currentIntervalMinutes = Math.Max(1, retryDelayMinutes);
 
         if (oneshot) break;
 
-        if (retryDelayMinutes > 0)
+        if (currentIntervalMinutes > 0)
         {
-            Console.WriteLine($"Sleeping {retryDelayMinutes}min before next check...");
-            await WaitForNextCheckAsync(TimeSpan.FromMinutes(retryDelayMinutes), immediateFetchSignal);
+            Console.WriteLine($"Sleeping {currentIntervalMinutes}min before next check...");
+            await WaitForNextCheckAsync(TimeSpan.FromMinutes(currentIntervalMinutes), immediateFetchSignal);
         }
 
         continue;
@@ -142,8 +144,8 @@ while (true)
     }
 
     if (oneshot) break;
-    Console.WriteLine($"Sleeping {intervalMinutes}min before next check...");
-    await WaitForNextCheckAsync(TimeSpan.FromMinutes(intervalMinutes), immediateFetchSignal);
+    Console.WriteLine($"Sleeping {currentIntervalMinutes}min before next check...");
+    await WaitForNextCheckAsync(TimeSpan.FromMinutes(currentIntervalMinutes), immediateFetchSignal);
 }
 
 heartbeatCts.Cancel();
@@ -245,15 +247,25 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, Clie
         }
     }
 
-    // 3. 只保留达标结果，再排序取TopN
-    var topResults = allResults
+    // 3. 优先保留达标结果；如果一个都不达标，至少回传 1 个最优结果，避免完全空结果
+    var qualifiedResults = allResults
         .Where(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps)
         .OrderByDescending(r => r.Score)
         .Take(task.TopN)
         .ToList();
 
+    var topResults = qualifiedResults.Count > 0
+        ? qualifiedResults
+        : allResults
+            .OrderByDescending(r => r.Score)
+            .Take(1)
+            .ToList();
+
     Console.WriteLine();
-    Console.WriteLine($"=== Qualified Top {topResults.Count} Results ===");
+    if (qualifiedResults.Count > 0)
+        Console.WriteLine($"=== Qualified Top {topResults.Count} Results ===");
+    else
+        Console.WriteLine($"=== No results met min speed {task.MinDownloadSpeedKBps:F1} KB/s, fallback to best 1 result ===");
     for (int i = 0; i < topResults.Count; i++)
     {
         var r = topResults[i];
@@ -279,7 +291,7 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, Clie
     reportResp.EnsureSuccessStatusCode();
     Console.WriteLine("OK");
 
-    return 0;
+    return Math.Max(1, task.ClientIntervalMinutes);
 }
 
 static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)

@@ -826,6 +826,17 @@ app.MapPost("/api/dns/test-auth", async (DnsUpdateService dns) =>
         return ApiResponse<string>.Fail("Auth failed. Check server logs for details.");
 });
 
+app.MapPost("/api/dns/test-record", async (DnsUpdateTriggerRequest? req, DnsUpdateService dns) =>
+{
+    if (string.IsNullOrWhiteSpace(req?.Isp))
+        return ApiResponse<string>.Fail("Isp is required");
+
+    var result = await dns.TestRecordConfigAsync(req.Isp);
+    return result.Success
+        ? ApiResponse<string>.Ok(result.Message)
+        : ApiResponse<string>.Fail(result.Message);
+});
+
 app.Run();
 
 static bool IsVersionNewer(string latestVersion, string currentVersion)

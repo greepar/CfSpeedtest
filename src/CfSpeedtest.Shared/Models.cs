@@ -514,23 +514,20 @@ public class HuaweiDnsConfig
     /// <summary>是否启用华为云 DNS 自动更新</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>华为云 IAM 用户名（可选，用于获取 Token）</summary>
-    public string IamUser { get; set; } = string.Empty;
+    /// <summary>华为云 Access Key（AK）</summary>
+    public string AccessKey { get; set; } = string.Empty;
 
-    /// <summary>华为云 IAM 密码（可选，用于获取 Token）</summary>
-    public string IamPassword { get; set; } = string.Empty;
-
-    /// <summary>华为云 IAM Domain Name（账号名）</summary>
-    public string IamDomainName { get; set; } = string.Empty;
+    /// <summary>华为云 Secret Key（SK）</summary>
+    public string SecretKey { get; set; } = string.Empty;
 
     /// <summary>华为云项目ID</summary>
     public string ProjectId { get; set; } = string.Empty;
 
+    /// <summary>华为云账号ID，可选，用于 X-Domain-Id</summary>
+    public string DomainId { get; set; } = string.Empty;
+
     /// <summary>华为云 DNS API Endpoint（如 https://dns.cn-north-4.myhuaweicloud.com）</summary>
     public string Endpoint { get; set; } = "https://dns.cn-north-4.myhuaweicloud.com";
-
-    /// <summary>华为云 IAM Endpoint（如 https://iam.cn-north-4.myhuaweicloud.com）</summary>
-    public string IamEndpoint { get; set; } = "https://iam.cn-north-4.myhuaweicloud.com";
 
     /// <summary>DNS 自动更新间隔（分钟），0 表示不自动更新，仅手动触发</summary>
     public int UpdateIntervalMinutes { get; set; } = 30;

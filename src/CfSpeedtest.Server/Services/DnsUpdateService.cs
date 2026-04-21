@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using CfSpeedtest.Shared;
 
 namespace CfSpeedtest.Server.Services;
@@ -14,11 +15,6 @@ public class DnsUpdateService : IHostedService, IDisposable
     private readonly ILogger<DnsUpdateService> _logger;
     private readonly DataStore _store;
     private readonly IHttpClientFactory _httpFactory;
-
-    // 缓存 IAM Token
-    private string? _cachedToken;
-    private DateTime _tokenExpiry = DateTime.MinValue;
-    private readonly SemaphoreSlim _tokenLock = new(1, 1);
 
     // 各运营商最后一次更新状态
     private readonly Dictionary<string, DnsUpdateStatus> _lastStatus = new();
@@ -130,16 +126,40 @@ public class DnsUpdateService : IHostedService, IDisposable
 
         foreach (var isp in new[] { "Telecom", "Unicom", "Mobile" })
         {
+            Enum.TryParse<IspType>(isp, out var ispEnum);
+            var aggregatedResults = AggregateLatestResultsForIsp(ispEnum, config.TopN);
+
             if (_lastStatus.TryGetValue(isp, out var status))
             {
+                if (string.IsNullOrWhiteSpace(status.Domain) && hwConfig.Records.TryGetValue(isp, out var statusRec))
+                {
+                    status.Domain = statusRec.Domain;
+                }
+
+                if ((status.Results is null || status.Results.Count == 0) && aggregatedResults.Count > 0)
+                {
+                    status.Results = aggregatedResults;
+                    if (string.IsNullOrWhiteSpace(status.Message))
+                    {
+                        status.Message = "当前展示最近一次可聚合的测速候选结果";
+                    }
+                }
+
                 result.Add(status);
             }
             else
             {
-                var s = new DnsUpdateStatus { Isp = isp, Message = "尚未执行过更新" };
+                var s = new DnsUpdateStatus
+                {
+                    Isp = isp,
+                    Message = aggregatedResults.Count > 0
+                        ? "尚未执行过更新，当前展示最近一次可聚合的测速候选结果"
+                        : "尚未执行过更新"
+                };
                 // 填充域名信息
                 if (hwConfig.Records.TryGetValue(isp, out var rec))
                     s.Domain = rec.Domain;
+                s.Results = aggregatedResults;
                 result.Add(s);
             }
         }
@@ -268,24 +288,76 @@ public class DnsUpdateService : IHostedService, IDisposable
     {
         var config = _store.GetConfig();
         var hwConfig = config.HuaweiDns;
-        
-        // 强制不使用缓存，以确保确实能连通
-        var oldToken = _cachedToken;
-        _cachedToken = null;
         try
         {
-            await GetIamTokenAsync(hwConfig);
+            ValidateSigningConfig(hwConfig);
+
+            var client = _httpFactory.CreateClient();
+            var url = $"{hwConfig.Endpoint.TrimEnd('/')}/v2/zones?limit=1";
+            using var request = CreateSignedRequest(HttpMethod.Get, url, body: null, hwConfig);
+
+            _logger.LogInformation("Testing Huawei DNS signed auth against {Url}", url);
+            var response = await client.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"Huawei DNS signed auth test failed (HTTP {(int)response.StatusCode}): {body}");
+            }
+
+            _logger.LogInformation("Huawei DNS signed auth test succeeded: {Body}", body);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Huawei IAM auth test failed");
+            _logger.LogWarning(ex, "Huawei DNS signed auth test failed");
             return false;
         }
-        finally
+    }
+
+    public async Task<(bool Success, string Message)> TestRecordConfigAsync(string ispKey)
+    {
+        try
         {
-            // 如果旧的有并且还在有效期内，恢复它（虽然实际上失败了可能配置已经改了，但无妨）
-            // 简单点，我们就不管恢复了，下次真正更新时会重新获取
+            var config = _store.GetConfig();
+            var hwConfig = config.HuaweiDns;
+            ValidateSigningConfig(hwConfig);
+
+            if (!hwConfig.Records.TryGetValue(ispKey, out var recordConfig))
+                return (false, $"未找到 {ispKey} 的记录集配置");
+            if (string.IsNullOrWhiteSpace(recordConfig.ZoneId) || string.IsNullOrWhiteSpace(recordConfig.RecordSetId))
+                return (false, $"{ispKey} 未配置 Zone ID 或 RecordSet ID");
+
+            var client = _httpFactory.CreateClient();
+            var url = $"{hwConfig.Endpoint.TrimEnd('/')}/v2.1/zones/{recordConfig.ZoneId}/recordsets/{recordConfig.RecordSetId}";
+            using var request = CreateSignedRequest(HttpMethod.Get, url, body: null, hwConfig);
+
+            _logger.LogInformation("Testing Huawei DNS record config for {Isp}: {Url}", ispKey, url);
+            var response = await client.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+                return (false, $"记录集测试失败 (HTTP {(int)response.StatusCode}): {body}");
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var apiName = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
+            var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? string.Empty : string.Empty;
+            var ttl = root.TryGetProperty("ttl", out var ttlEl) && ttlEl.ValueKind == JsonValueKind.Number ? ttlEl.GetInt32() : 0;
+
+            if (!string.IsNullOrWhiteSpace(recordConfig.Domain))
+            {
+                var expected = recordConfig.Domain.EndsWith('.') ? recordConfig.Domain : recordConfig.Domain + ".";
+                if (!string.Equals(apiName, expected, StringComparison.OrdinalIgnoreCase))
+                    return (false, $"记录集存在，但域名不匹配。当前配置: {expected}，华为云返回: {apiName}");
+            }
+
+            return (true, $"记录集可访问，类型 {type}，TTL {ttl}，域名 {apiName}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Huawei DNS record config test failed for {Isp}", ispKey);
+            return (false, ex.Message);
         }
     }
 
@@ -369,8 +441,6 @@ public class DnsUpdateService : IHostedService, IDisposable
 
             status.Domain = recordConfig.Domain;
 
-            var token = await GetIamTokenAsync(hwConfig);
-
             var client = _httpFactory.CreateClient();
             var url = $"{hwConfig.Endpoint.TrimEnd('/')}/v2.1/zones/{recordConfig.ZoneId}/recordsets/{recordConfig.RecordSetId}";
 
@@ -383,11 +453,7 @@ public class DnsUpdateService : IHostedService, IDisposable
             };
 
             var json = JsonSerializer.Serialize(requestBody);
-            var request = new HttpRequestMessage(HttpMethod.Put, url)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            };
-            request.Headers.Add("X-Auth-Token", token);
+            using var request = CreateSignedRequest(HttpMethod.Put, url, json, hwConfig);
 
             _logger.LogInformation("Updating Huawei DNS for {Isp}: {Url} with IPs: {Ips}",
                 ispKey, url, string.Join(", ", ips));
@@ -445,77 +511,143 @@ public class DnsUpdateService : IHostedService, IDisposable
         _lastStatus[ispKey] = status;
     }
 
-    /// <summary>
-    /// 获取华为云 IAM Token（带缓存）
-    /// POST {iamEndpoint}/v3/auth/tokens
-    /// </summary>
-    private async Task<string> GetIamTokenAsync(HuaweiDnsConfig hwConfig)
+    private static void ValidateSigningConfig(HuaweiDnsConfig hwConfig)
     {
-        await _tokenLock.WaitAsync();
-        try
+        if (string.IsNullOrWhiteSpace(hwConfig.AccessKey) || string.IsNullOrWhiteSpace(hwConfig.SecretKey))
+            throw new InvalidOperationException("未配置华为云 AK/SK");
+        if (string.IsNullOrWhiteSpace(hwConfig.Endpoint))
+            throw new InvalidOperationException("未配置华为云 DNS Endpoint");
+    }
+
+    private static HttpRequestMessage CreateSignedRequest(HttpMethod method, string url, string? body, HuaweiDnsConfig hwConfig)
+    {
+        ValidateSigningConfig(hwConfig);
+
+        var uri = new Uri(url);
+        var request = new HttpRequestMessage(method, uri);
+        var requestBody = body ?? string.Empty;
+
+        if (!string.IsNullOrEmpty(body))
         {
-            if (_cachedToken != null && DateTime.UtcNow < _tokenExpiry.AddMinutes(-5))
-            {
-                return _cachedToken;
-            }
-
-            var client = _httpFactory.CreateClient();
-            var url = $"{hwConfig.IamEndpoint.TrimEnd('/')}/v3/auth/tokens";
-
-            var requestBody = new
-            {
-                auth = new
-                {
-                    identity = new
-                    {
-                        methods = new[] { "password" },
-                        password = new
-                        {
-                            user = new
-                            {
-                                name = hwConfig.IamUser,
-                                password = hwConfig.IamPassword,
-                                domain = new { name = hwConfig.IamDomainName }
-                            }
-                        }
-                    },
-                    scope = new
-                    {
-                        project = new { id = hwConfig.ProjectId }
-                    }
-                }
-            };
-
-            var json = JsonSerializer.Serialize(requestBody);
-            var request = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            };
-
-            _logger.LogInformation("Requesting IAM token from {Url}", url);
-            var response = await client.SendAsync(request);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var errorBody = await response.Content.ReadAsStringAsync();
-                throw new InvalidOperationException(
-                    $"IAM token request failed (HTTP {(int)response.StatusCode}): {errorBody}");
-            }
-
-            if (!response.Headers.TryGetValues("X-Subject-Token", out var tokenValues))
-            {
-                throw new InvalidOperationException("IAM response missing X-Subject-Token header");
-            }
-
-            _cachedToken = tokenValues.First();
-            _tokenExpiry = DateTime.UtcNow.AddHours(24);
-
-            _logger.LogInformation("IAM token obtained successfully, expires at {Expiry}", _tokenExpiry);
-            return _cachedToken;
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         }
-        finally
+
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
+        var headers = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
-            _tokenLock.Release();
+            ["host"] = uri.Authority,
+            ["x-sdk-date"] = timestamp,
+        };
+
+        if (request.Content is not null)
+        {
+            headers["content-type"] = "application/json; charset=utf-8";
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
+            {
+                CharSet = "utf-8"
+            };
         }
+
+        if (!string.IsNullOrWhiteSpace(hwConfig.ProjectId))
+        {
+            headers["x-project-id"] = hwConfig.ProjectId.Trim();
+            request.Headers.TryAddWithoutValidation("X-Project-Id", hwConfig.ProjectId.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(hwConfig.DomainId))
+        {
+            headers["x-domain-id"] = hwConfig.DomainId.Trim();
+            request.Headers.TryAddWithoutValidation("X-Domain-Id", hwConfig.DomainId.Trim());
+        }
+
+        request.Headers.Host = uri.Authority;
+        request.Headers.TryAddWithoutValidation("X-Sdk-Date", timestamp);
+
+        var signedHeaders = string.Join(";", headers.Keys);
+        var canonicalRequest = string.Join("\n",
+            method.Method.ToUpperInvariant(),
+            BuildCanonicalUri(uri.AbsolutePath),
+            BuildCanonicalQueryString(uri.Query),
+            BuildCanonicalHeaders(headers),
+            signedHeaders,
+            Sha256Hex(requestBody));
+
+        var stringToSign = $"SDK-HMAC-SHA256\n{timestamp}\n{Sha256Hex(canonicalRequest)}";
+        var signature = HmacSha256Hex(hwConfig.SecretKey.Trim(), stringToSign);
+        var authorization = $"SDK-HMAC-SHA256 Access={hwConfig.AccessKey.Trim()}, SignedHeaders={signedHeaders}, Signature={signature}";
+        request.Headers.TryAddWithoutValidation("Authorization", authorization);
+
+        return request;
+    }
+
+    private static string BuildCanonicalUri(string absolutePath)
+    {
+        if (string.IsNullOrEmpty(absolutePath))
+            return "/";
+
+        var segments = absolutePath.Split('/', StringSplitOptions.None)
+            .Select(EscapeCanonicalComponent);
+        var result = string.Join('/', segments);
+        if (!result.StartsWith('/'))
+            result = "/" + result;
+        if (!result.EndsWith('/'))
+            result += "/";
+        return result;
+    }
+
+    private static string BuildCanonicalQueryString(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query == "?")
+            return string.Empty;
+
+        var pairs = new List<(string Key, string Value)>();
+        foreach (var segment in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var idx = segment.IndexOf('=');
+            var rawKey = idx >= 0 ? segment[..idx] : segment;
+            var rawValue = idx >= 0 ? segment[(idx + 1)..] : string.Empty;
+            var key = EscapeCanonicalComponent(Uri.UnescapeDataString(rawKey.Replace("+", "%20")));
+            var value = EscapeCanonicalComponent(Uri.UnescapeDataString(rawValue.Replace("+", "%20")));
+            pairs.Add((key, value));
+        }
+
+        return string.Join("&", pairs
+            .OrderBy(p => p.Key, StringComparer.Ordinal)
+            .ThenBy(p => p.Value, StringComparer.Ordinal)
+            .Select(p => $"{p.Key}={p.Value}"));
+    }
+
+    private static string BuildCanonicalHeaders(SortedDictionary<string, string> headers)
+    {
+        return string.Join("\n", headers.Select(h => $"{h.Key}:{NormalizeHeaderValue(h.Value)}")) + "\n";
+    }
+
+    private static string NormalizeHeaderValue(string value)
+    {
+        return string.Join(' ', value.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string EscapeCanonicalComponent(string value)
+    {
+        return Uri.EscapeDataString(value)
+            .Replace("%7E", "~")
+            .Replace("+", "%20")
+            .Replace("*", "%2A");
+    }
+
+    private static string Sha256Hex(string value)
+    {
+        return ConvertToHex(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    }
+
+    private static string HmacSha256Hex(string secret, string value)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        return ConvertToHex(hmac.ComputeHash(Encoding.UTF8.GetBytes(value)));
+    }
+
+    private static string ConvertToHex(byte[] bytes)
+    {
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

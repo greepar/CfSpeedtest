@@ -480,37 +480,33 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>IAM 用户名</label>
-                    <input id="hw-iam-user" placeholder="your-iam-username" />
+                    <label>Access Key (AK)</label>
+                    <input id="hw-access-key" placeholder="your-access-key" />
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>IAM 密码</label>
-                    <input id="hw-iam-password" type="password" placeholder="your-iam-password" />
+                    <label>Secret Key (SK)</label>
+                    <input id="hw-secret-key" type="password" placeholder="your-secret-key" />
                 </div>
                 <div class="form-group">
-                    <label>IAM Domain Name（账号名）</label>
-                    <input id="hw-iam-domain" placeholder="your-domain-name" />
+                    <label>账号 ID（X-Domain-ID，可选）</label>
+                    <input id="hw-domain-id" placeholder="domain-id-optional" />
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>项目 ID (Project ID)</label>
-                    <input id="hw-project-id" placeholder="project-id" />
+                    <label>项目 ID（X-Project-ID，可选）</label>
+                    <input id="hw-project-id" placeholder="project-id-optional" />
                 </div>
                 <div class="form-group">
                     <label>DNS API Endpoint</label>
                     <input id="hw-endpoint" placeholder="https://dns.cn-north-4.myhuaweicloud.com" />
                 </div>
             </div>
-            <div class="form-group" style="max-width:calc(50% - 6px);">
-                <label>IAM Endpoint</label>
-                <input id="hw-iam-endpoint" placeholder="https://iam.cn-north-4.myhuaweicloud.com" />
-            </div>
             <div style="margin-top:12px; display:flex; gap:8px;">
                 <button class="btn btn-primary" onclick="saveHuaweiDnsConfig()">保存凭证配置</button>
-                <button class="btn btn-secondary" onclick="testHuaweiConnection()">测试连接</button>
+                <button class="btn btn-secondary" onclick="testHuaweiConnection()">测试签名连接</button>
             </div>
         </div>
 
@@ -546,7 +542,10 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     <input id="hw-ttl" type="number" value="60" />
                 </div>
             </div>
-            <button class="btn btn-primary" onclick="saveHuaweiDnsRecordConfig()" style="margin-top:8px;">保存 <span class="dns-isp-label">电信</span> 记录配置</button>
+            <div style="margin-top:8px; display:flex; gap:8px;">
+                <button class="btn btn-primary" onclick="saveHuaweiDnsRecordConfig()">保存 <span class="dns-isp-label">电信</span> 记录配置</button>
+                <button class="btn btn-secondary" onclick="testHuaweiDnsRecordConfig()">测试 <span class="dns-isp-label">电信</span> 记录配置</button>
+            </div>
         </div>
 
         <!-- 手动触发 & 状态 -->
@@ -558,6 +557,9 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             <button class="btn btn-secondary" onclick="loadDnsStatus()">刷新状态</button>
         </div>
 
+        <div style="font-size:12px; color:var(--text2); margin-bottom:10px;">
+            下方显示的是各运营商<strong>最终综合汇总后的 TopN 结果</strong>，也就是实际用于 DNS 更新的候选 IP 列表。
+        </div>
         <div id="dns-status-list"></div>
     </div>
 </div>
@@ -1878,12 +1880,11 @@ function fillDnsGlobalFields() {
     var hw = serverConfigData.huaweiDns || {};
     document.getElementById('hw-enabled').value = hw.enabled ? 'true' : 'false';
     document.getElementById('hw-interval').value = hw.updateIntervalMinutes != null ? hw.updateIntervalMinutes : 30;
-    document.getElementById('hw-iam-user').value = hw.iamUser || '';
-    document.getElementById('hw-iam-password').value = hw.iamPassword || '';
-    document.getElementById('hw-iam-domain').value = hw.iamDomainName || '';
+    document.getElementById('hw-access-key').value = hw.accessKey || '';
+    document.getElementById('hw-secret-key').value = hw.secretKey || '';
+    document.getElementById('hw-domain-id').value = hw.domainId || '';
     document.getElementById('hw-project-id').value = hw.projectId || '';
     document.getElementById('hw-endpoint').value = hw.endpoint || 'https://dns.cn-north-4.myhuaweicloud.com';
-    document.getElementById('hw-iam-endpoint').value = hw.iamEndpoint || 'https://iam.cn-north-4.myhuaweicloud.com';
 }
 
 function fillDnsRecordFields() {
@@ -1902,26 +1903,25 @@ function saveHuaweiDnsConfig() {
     var hw = serverConfigData.huaweiDns || {};
     hw.enabled = document.getElementById('hw-enabled').value === 'true';
     hw.updateIntervalMinutes = parseInt(document.getElementById('hw-interval').value) || 0;
-    hw.iamUser = document.getElementById('hw-iam-user').value;
-    var pwd = document.getElementById('hw-iam-password').value;
-    if (pwd) hw.iamPassword = pwd;
-    hw.iamDomainName = document.getElementById('hw-iam-domain').value;
+    hw.accessKey = document.getElementById('hw-access-key').value.trim();
+    var sk = document.getElementById('hw-secret-key').value;
+    if (sk) hw.secretKey = sk;
+    hw.domainId = document.getElementById('hw-domain-id').value.trim();
     hw.projectId = document.getElementById('hw-project-id').value;
     hw.endpoint = document.getElementById('hw-endpoint').value;
-    hw.iamEndpoint = document.getElementById('hw-iam-endpoint').value;
     
     serverConfigData.huaweiDns = hw;
     api('/api/config', 'POST', serverConfigData).then(function(r) {
-        if (r.success) toast('华为云凭证配置已保存');
+        if (r.success) toast('华为云 AK/SK 配置已保存');
         else toast(r.message || '保存失败', false);
     });
 }
 
 function testHuaweiConnection() {
-    toast('正在测试连接，请稍候...');
+    toast('正在测试 AK/SK 签名连接，请稍候...');
     api('/api/dns/test-auth', 'POST', {}).then(function(r) {
         if (r.success) {
-            toast('✅ 连接成功！IAM 认证通过。');
+            toast('✅ 连接成功！AK/SK 签名认证通过。');
         } else {
             toast('❌ 连接失败: ' + (r.message || '未知错误'), false);
         }
@@ -1943,6 +1943,19 @@ function saveHuaweiDnsRecordConfig() {
     api('/api/config', 'POST', serverConfigData).then(function(r) {
         if (r.success) toast(ISP_NAMES[currentDnsIspTab] + ' 记录配置已保存');
         else toast(r.message || '保存失败', false);
+    });
+}
+
+function testHuaweiDnsRecordConfig() {
+    toast('正在测试 ' + ISP_NAMES[currentDnsIspTab] + ' 记录集配置...');
+    api('/api/dns/test-record', 'POST', { isp: currentDnsIspTab }).then(function(r) {
+        if (r.success) {
+            toast(r.data || r.message || '记录集测试成功');
+        } else {
+            toast(r.message || '记录集测试失败', false);
+        }
+    }).catch(function(err) {
+        toast('网络错误: ' + err.message, false);
     });
 }
 
@@ -2009,6 +2022,7 @@ function renderDnsStatus(statusList) {
         html += ispBadge + ' <strong>' + (s.domain || '-') + '</strong> ' + badge;
         html += '<span style="font-size:12px;color:var(--text2);margin-left:auto;">' + fmtTime(s.lastUpdatedAt) + '</span>';
         html += '</div>';
+        html += '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">以下为该运营商最终综合 TopN（用于 DNS 更新的候选结果）</div>';
         if (s.message) {
             html += '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">' + s.message + '</div>';
         }
@@ -2018,16 +2032,20 @@ function renderDnsStatus(statusList) {
                 '<th>IP 地址</th><th>延迟 (ms)</th><th>丢包率</th><th>下载速度</th><th>综合评分</th>' +
                 '</tr></thead><tbody>';
             results.forEach(function(r) {
-                var lossColor = r.lossRate > 0.1 ? 'color:#e74c3c;' : (r.lossRate > 0 ? 'color:#f39c12;' : 'color:#27ae60;');
-                var speedStr = r.downloadSpeedKBps >= 1024
-                    ? (r.downloadSpeedKBps / 1024).toFixed(2) + ' MB/s'
-                    : r.downloadSpeedKBps.toFixed(1) + ' KB/s';
+                var latency = typeof r.avgLatencyMs === 'number' ? r.avgLatencyMs : (typeof r.latencyMs === 'number' ? r.latencyMs : 0);
+                var lossRate = typeof r.packetLossRate === 'number' ? r.packetLossRate : (typeof r.lossRate === 'number' ? r.lossRate : 0);
+                var downloadSpeedKBps = typeof r.downloadSpeedKBps === 'number' ? r.downloadSpeedKBps : 0;
+                var score = typeof r.score === 'number' ? r.score : 0;
+                var lossColor = lossRate > 0.1 ? 'color:#e74c3c;' : (lossRate > 0 ? 'color:#f39c12;' : 'color:#27ae60;');
+                var speedStr = downloadSpeedKBps >= 1024
+                    ? (downloadSpeedKBps / 1024).toFixed(2) + ' MB/s'
+                    : downloadSpeedKBps.toFixed(1) + ' KB/s';
                 html += '<tr>' +
                     '<td style="font-family:monospace;">' + r.ipAddress + '</td>' +
-                    '<td>' + r.latencyMs.toFixed(1) + '</td>' +
-                    '<td style="' + lossColor + '">' + (r.lossRate * 100).toFixed(1) + '%</td>' +
+                    '<td>' + latency.toFixed(1) + '</td>' +
+                    '<td style="' + lossColor + '">' + (lossRate * 100).toFixed(1) + '%</td>' +
                     '<td>' + speedStr + '</td>' +
-                    '<td>' + r.score.toFixed(2) + '</td>' +
+                    '<td>' + score.toFixed(2) + '</td>' +
                     '</tr>';
             });
             html += '</tbody></table>';
