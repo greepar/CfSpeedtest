@@ -29,6 +29,7 @@ public class RoundCoordinatorService : BackgroundService
     private readonly Dictionary<string, RoundState> _rounds = new();
     private readonly HashSet<string> _manualTriggeredIsps = [];
     private readonly HashSet<string> _manualUpdateClients = [];
+    private readonly Dictionary<string, DateTime> _manualTriggeredStarts = [];
 
     public RoundCoordinatorService(
         DataStore store,
@@ -49,9 +50,15 @@ public class RoundCoordinatorService : BackgroundService
 
         lock (_lock)
         {
-            var startAtUtc = _manualTriggeredIsps.Remove(ispKey)
-                ? DateTime.UtcNow.AddSeconds(2)
+            var hasManualTrigger = _manualTriggeredIsps.Remove(ispKey);
+            var startAtUtc = hasManualTrigger && _manualTriggeredStarts.TryGetValue(ispKey, out var manualStartAtUtc)
+                ? manualStartAtUtc
                 : GetNextRoundStartUtc(DateTime.UtcNow, config.ClientIntervalMinutes);
+
+            if (hasManualTrigger)
+            {
+                _manualTriggeredStarts.Remove(ispKey);
+            }
 
             if (!_rounds.TryGetValue(ispKey, out var state) || state.StartAtUtc != startAtUtc)
             {
@@ -73,6 +80,8 @@ public class RoundCoordinatorService : BackgroundService
 
     public void TriggerImmediateRound(string? ispFilter)
     {
+        var config = _store.GetConfig();
+
         lock (_lock)
         {
             var isps = string.IsNullOrWhiteSpace(ispFilter)
@@ -81,7 +90,21 @@ public class RoundCoordinatorService : BackgroundService
 
             foreach (var isp in isps)
             {
+                var startAtUtc = DateTime.UtcNow.AddSeconds(2);
                 _manualTriggeredIsps.Add(isp);
+                _manualTriggeredStarts[isp] = startAtUtc;
+
+                if (!Enum.TryParse<IspType>(isp, out var ispEnum))
+                    continue;
+
+                _rounds[isp] = new RoundState
+                {
+                    Isp = ispEnum,
+                    IspKey = isp,
+                    TaskId = $"{isp}-{startAtUtc:yyyyMMddHHmmss}",
+                    StartAtUtc = startAtUtc,
+                    FinalizeAfterUtc = startAtUtc.Add(GetFinalizeGracePeriod(config)),
+                };
             }
         }
     }
@@ -185,6 +208,13 @@ public class RoundCoordinatorService : BackgroundService
                     });
                 }
             }
+
+            var nextManualStart = statuses
+                .Where(s => s.ScheduledAtUtc > nowUtc)
+                .Select(s => s.ScheduledAtUtc)
+                .DefaultIfEmpty(nextRoundStartUtc)
+                .Min();
+            nextRoundStartUtc = nextManualStart;
         }
 
         return new RoundStatusOverview

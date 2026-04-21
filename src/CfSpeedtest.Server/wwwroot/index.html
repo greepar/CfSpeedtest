@@ -366,6 +366,34 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                 </div>
             </div>
         </div>
+        <div id="client-edit-panel" style="display:none; background:var(--bg); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:16px;">
+            <h3 style="margin:0 0 12px; color:var(--accent); font-size:15px;">编辑客户端服务端信息</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>clientId</label>
+                    <input id="edit-client-id" readonly />
+                </div>
+                <div class="form-group">
+                    <label>客户端名称</label>
+                    <input id="edit-client-name" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>运营商</label>
+                    <select id="edit-client-isp">
+                        <option value="Telecom">电信</option>
+                        <option value="Unicom">联通</option>
+                        <option value="Mobile">移动</option>
+                    </select>
+                </div>
+                <div class="form-group"></div>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button class="btn btn-primary" type="button" onclick="saveClientMetadata()">保存客户端信息</button>
+                <button class="btn btn-secondary" type="button" onclick="cancelClientMetadataEdit()">取消</button>
+            </div>
+        </div>
         <div id="clients-list"></div>
     </div>
 </div>
@@ -1359,33 +1387,38 @@ function toggleClientAllowed(btn) {
 }
 
 function editClientMetadata(clientId, currentName, currentIsp) {
-    var name = prompt('请输入新的客户端名称', currentName || '');
-    if (name === null) return;
-    name = name.trim();
+    document.getElementById('edit-client-id').value = clientId;
+    document.getElementById('edit-client-name').value = currentName || '';
+    document.getElementById('edit-client-isp').value = currentIsp || 'Telecom';
+    document.getElementById('client-edit-panel').style.display = 'block';
+}
+
+function cancelClientMetadataEdit() {
+    document.getElementById('client-edit-panel').style.display = 'none';
+}
+
+function saveClientMetadata() {
+    var clientId = document.getElementById('edit-client-id').value;
+    var name = document.getElementById('edit-client-name').value.trim();
+    var isp = document.getElementById('edit-client-isp').value;
     if (!name) {
         toast('客户端名称不能为空', false);
         return;
     }
 
-    var isp = prompt('请输入新的运营商（Telecom / Unicom / Mobile）', currentIsp || 'Telecom');
-    if (isp === null) return;
-    isp = isp.trim();
-    if (!/^(Telecom|Unicom|Mobile)$/i.test(isp)) {
-        toast('运营商只能是 Telecom / Unicom / Mobile', false);
-        return;
-    }
-
-    isp = isp.charAt(0).toUpperCase() + isp.slice(1).toLowerCase();
     api('/api/clients/' + encodeURIComponent(clientId) + '/metadata', 'POST', {
         name: name,
         isp: isp
     }).then(function(r) {
         if (r.success) {
             toast('客户端名称和运营商已更新，在线客户端会立即或在下次心跳时同步');
+            cancelClientMetadataEdit();
             loadClients();
         } else {
             toast(r.message || '更新失败', false);
         }
+    }).catch(function(err) {
+        toast('更新失败: ' + err.message, false);
     });
 }
 
@@ -1914,6 +1947,14 @@ function triggerDnsTestAndUpdate(isp) {
     api('/api/dns/trigger-test', 'POST', body).then(function(r) {
         if (r.success) {
             toast(r.message || (label + ' 测速触发已下发'));
+            loadDnsStatus();
+            api('/api/rounds/status').then(function(rr) {
+                if (rr.success) {
+                    roundStatusData = rr.data || null;
+                    renderRoundStatus(roundStatusData);
+                    startDashboardAutoRefresh();
+                }
+            });
         } else {
             toast(r.message || '测速触发失败', false);
         }
