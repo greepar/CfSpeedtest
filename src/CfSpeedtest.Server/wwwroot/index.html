@@ -1338,7 +1338,7 @@ function loadClientUpdateOverview() {
         } else {
             html += '<div style="margin-bottom:6px;">本地目录: <span style="font-family:monospace;">' + escapeHtml(d.localDirectory || '-') + '</span></div>';
         }
-        html += '<div style="margin-bottom:8px;">命名规则: <span style="font-family:monospace;">cfspeedtest-client-{platform}.zip|tar.xz</span></div>';
+        html += '<div style="margin-bottom:8px;">命名规则: <span style="font-family:monospace;">cfspeedtest-client-{platform}.zip</span></div>';
         html += '<div style="margin-bottom:8px;">当前配置: 最新版本 <strong>' + escapeHtml(d.latestVersion || '-') + '</strong>，自动更新 ' + (d.enabled ? '已启用' : '未启用') + '</div>';
         html += '<table style="margin:0;"><thead><tr><th>平台</th><th>文件名</th><th>下载地址</th></tr></thead><tbody>';
         (d.packages || []).forEach(function(p) {

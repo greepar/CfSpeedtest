@@ -674,8 +674,7 @@ static bool IsVersionNewer(string latestVersion, string currentVersion)
 
 static string GetClientUpdateFileName(string platform)
 {
-    var archiveExt = platform.StartsWith("win-", StringComparison.OrdinalIgnoreCase) ? "zip" : "tar.xz";
-    return $"cfspeedtest-client-{platform}.{archiveExt}";
+    return $"cfspeedtest-client-{platform}.zip";
 }
 
 static string CombineProxyUrl(string proxyPrefix, string rawUrl)

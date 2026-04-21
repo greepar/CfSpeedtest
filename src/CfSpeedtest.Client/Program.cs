@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Net.WebSockets;
@@ -16,6 +17,11 @@ using CfSpeedtest.Shared;
 
 Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
 Console.WriteLine();
+
+if (HasFlag(args, "apply-update"))
+{
+    return await RunApplyUpdateModeAsync(args);
+}
 
 // 读取配置
 var serverUrl = GetArg(args, "server", "http://127.0.0.1:5000");
@@ -306,11 +312,143 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         using var file = File.Create(tempFile);
         await download.CopyToAsync(file);
         Console.WriteLine($"Update package downloaded to: {tempFile}");
-        Console.WriteLine("Please replace the client executable manually with the downloaded package content.");
+
+        var currentExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrWhiteSpace(currentExe))
+        {
+            Console.WriteLine("Cannot determine current executable path. Please replace manually.");
+            return;
+        }
+
+        var targetDir = Path.GetDirectoryName(currentExe)!;
+        var stagingDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-update-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingDir);
+
+        Console.WriteLine("Extracting update package...");
+        ZipFile.ExtractToDirectory(tempFile, stagingDir, true);
+
+        var restartArgsFile = Path.Combine(stagingDir, "restart-args.txt");
+        await File.WriteAllLinesAsync(restartArgsFile, Environment.GetCommandLineArgs().Skip(1).Where(a => !string.Equals(a, "--apply-update", StringComparison.OrdinalIgnoreCase)));
+
+        var updaterArgs = new[]
+        {
+            "--apply-update",
+            "--parent-pid", Process.GetCurrentProcess().Id.ToString(),
+            "--update-package", tempFile,
+            "--update-staging", stagingDir,
+            "--update-target", targetDir,
+            "--restart-args-file", restartArgsFile,
+        };
+
+        Console.WriteLine("Launching updater...");
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = currentExe,
+            Arguments = string.Join(" ", updaterArgs.Select(QuoteArg)),
+            UseShellExecute = false,
+            WorkingDirectory = targetDir,
+        });
+
+        Console.WriteLine("Updater launched. Exiting current client for self-update...");
+        Environment.Exit(0);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"Update check failed: {ex.Message}");
+    }
+}
+
+static async Task<int> RunApplyUpdateModeAsync(string[] args)
+{
+    var parentPidText = GetArg(args, "parent-pid", "0");
+    var packagePath = GetArg(args, "update-package", "");
+    var stagingDir = GetArg(args, "update-staging", "");
+    var targetDir = GetArg(args, "update-target", "");
+    var restartArgsFile = GetArg(args, "restart-args-file", "");
+
+    Console.WriteLine("Running self-updater mode...");
+
+    if (int.TryParse(parentPidText, out var parentPid) && parentPid > 0)
+    {
+        try
+        {
+            var parent = Process.GetProcessById(parentPid);
+            parent.WaitForExit(30000);
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(stagingDir) || string.IsNullOrWhiteSpace(targetDir) || !Directory.Exists(stagingDir))
+    {
+        Console.WriteLine("Updater staging directory is missing.");
+        return 1;
+    }
+
+    var backupDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-backup-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(backupDir);
+
+    try
+    {
+        Console.WriteLine("Backing up current files...");
+        foreach (var sourceFile in Directory.GetFiles(targetDir))
+        {
+            var fileName = Path.GetFileName(sourceFile);
+            if (string.Equals(fileName, "client-state.json", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            File.Copy(sourceFile, Path.Combine(backupDir, fileName), true);
+        }
+
+        Console.WriteLine("Applying update files...");
+        foreach (var sourceFile in Directory.GetFiles(stagingDir))
+        {
+            var fileName = Path.GetFileName(sourceFile);
+            File.Copy(sourceFile, Path.Combine(targetDir, fileName), true);
+        }
+
+        Console.WriteLine("Restarting updated client...");
+        var targetExe = Path.Combine(targetDir, Path.GetFileName(Environment.ProcessPath ?? "CfSpeedtest.Client.exe"));
+        var restartArgs = File.Exists(restartArgsFile)
+            ? await File.ReadAllLinesAsync(restartArgsFile)
+            : [];
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = targetExe,
+            Arguments = string.Join(" ", restartArgs.Select(QuoteArg)),
+            UseShellExecute = false,
+            WorkingDirectory = targetDir,
+        });
+
+        TryDeleteDirectory(stagingDir);
+        TryDeleteDirectory(backupDir);
+        TryDeleteFile(packagePath);
+        TryDeleteFile(restartArgsFile);
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Update apply failed: {ex.Message}");
+        Console.WriteLine("Attempting rollback...");
+
+        try
+        {
+            foreach (var backupFile in Directory.GetFiles(backupDir))
+            {
+                var fileName = Path.GetFileName(backupFile);
+                File.Copy(backupFile, Path.Combine(targetDir, fileName), true);
+            }
+            Console.WriteLine("Rollback completed.");
+        }
+        catch (Exception rollbackEx)
+        {
+            Console.WriteLine($"Rollback failed: {rollbackEx.Message}");
+        }
+
+        return 1;
     }
 }
 
@@ -726,6 +864,13 @@ static string NormalizeArgKey(string value)
     return value.Trim().TrimStart('-').TrimStart('-');
 }
 
+static string QuoteArg(string value)
+{
+    if (string.IsNullOrEmpty(value)) return "\"\"";
+    if (!value.Any(char.IsWhiteSpace) && !value.Contains('"')) return value;
+    return "\"" + value.Replace("\"", "\\\"") + "\"";
+}
+
 static ClientLocalState LoadClientState(string path)
 {
     try
@@ -751,4 +896,24 @@ static void SaveClientState(string path, ClientLocalState state)
     {
         // 忽略本地持久化失败
     }
+}
+
+static void TryDeleteDirectory(string? path)
+{
+    try
+    {
+        if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+            Directory.Delete(path, true);
+    }
+    catch { }
+}
+
+static void TryDeleteFile(string? path)
+{
+    try
+    {
+        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            File.Delete(path);
+    }
+    catch { }
 }

@@ -36,31 +36,31 @@ jobs:
           - runner: ubuntu-latest
             rid: linux-x64
             archive_name: cfspeedtest-client-linux-x64
-            archive_ext: tar.xz
+            archive_ext: zip
           - runner: ubuntu-latest
             rid: linux-musl-x64
             archive_name: cfspeedtest-client-linux-musl-x64
-            archive_ext: tar.xz
+            archive_ext: zip
           - runner: ubuntu-latest
             rid: linux-arm64
             archive_name: cfspeedtest-client-linux-arm64
-            archive_ext: tar.xz
+            archive_ext: zip
           - runner: ubuntu-latest
             rid: linux-musl-arm64
             archive_name: cfspeedtest-client-linux-musl-arm64
-            archive_ext: tar.xz
+            archive_ext: zip
           - runner: ubuntu-latest
             rid: linux-arm
             archive_name: cfspeedtest-client-linux-arm
-            archive_ext: tar.xz
+            archive_ext: zip
           - runner: macos-14
             rid: osx-x64
             archive_name: cfspeedtest-client-osx-x64
-            archive_ext: tar.xz
+            archive_ext: zip
           - runner: macos-14
             rid: osx-arm64
             archive_name: cfspeedtest-client-osx-arm64
-            archive_ext: tar.xz
+            archive_ext: zip
 
     steps:
       - name: Checkout repository
@@ -117,9 +117,11 @@ jobs:
         run: Compress-Archive -Path ./publish/${{ matrix.rid }}/* -DestinationPath ./${{ matrix.archive_name }}.${{ matrix.archive_ext }}
         shell: pwsh
 
-      - name: Create tar.xz archive (Linux/macOS)
+      - name: Create zip archive (Linux/macOS)
         if: runner.os != 'Windows'
-        run: tar -cJf ${{ matrix.archive_name }}.${{ matrix.archive_ext }} -C publish/${{ matrix.rid }} .
+        run: |
+          cd publish/${{ matrix.rid }}
+          zip -r ../../${{ matrix.archive_name }}.${{ matrix.archive_ext }} .
         shell: bash
 
       - name: Upload packaged artifact
