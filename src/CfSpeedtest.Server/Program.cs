@@ -15,6 +15,8 @@ builder.Services.AddSingleton<IpPoolService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IpPoolService>());
 builder.Services.AddSingleton<DnsUpdateService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DnsUpdateService>());
+builder.Services.AddSingleton<RoundCoordinatorService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundCoordinatorService>());
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
@@ -53,7 +55,7 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
 // ============================================================
 //  API: 客户端获取测速任务
 // ============================================================
-app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolService ipPool) =>
+app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolService ipPool, RoundCoordinatorService rounds) =>
 {
     var client = store.GetClient(clientId);
     if (client is null)
@@ -65,6 +67,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
 
     var config = store.GetConfig();
     var ips = ipPool.GetBatch(client.Isp.ToString());
+    var round = rounds.RegisterClient(client.Isp, clientId);
 
     if (ips.Count == 0)
         return Results.Json(ApiResponse<SpeedTestTask>.Fail($"No IPs in pool for ISP {client.Isp}"));
@@ -79,6 +82,8 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         TcpTestDurationSeconds = config.TcpTestDurationSeconds,
         TopN = config.TopN,
         ClientIntervalMinutes = config.ClientIntervalMinutes,
+        TaskId = round.TaskId,
+        ScheduledAtUtc = round.ScheduledAtUtc,
     };
 
     return Results.Json(ApiResponse<SpeedTestTask>.Ok(task));
@@ -87,7 +92,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
 // ============================================================
 //  API: 客户端提交测速结果
 // ============================================================
-app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, DnsUpdateService dns) =>
+app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, RoundCoordinatorService rounds) =>
 {
     if (report.Results.Count == 0)
         return ApiResponse<string>.Fail("No results");
@@ -109,39 +114,15 @@ app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, DnsUp
     };
     store.AddHistory(history);
 
-    // 自动清理：综合该运营商所有客户端最新结果，只保留 TopN 最优 IP，其余从池中删除
-    var config = store.GetConfig();
-    int cleaned = 0;
-    if (config.AutoCleanupEnabled && report.Results.Count > 0)
-    {
-        // 综合所有客户端的最新结果，取 TopN 最优 IP
-        var topResults = dns.AggregateLatestResultsForIsp(report.Isp, config.TopN);
-        var keepIps = topResults.Select(r => r.IpAddress).ToHashSet();
-
-        // 池中所有 IP 减去 TopN 保留的，即为要删除的
-        var ispKey = report.Isp.ToString();
-        var poolIps = store.GetApiIpPool(ispKey);
-        var removeIps = poolIps.Where(ip => !keepIps.Contains(ip)).ToList();
-
-        if (removeIps.Count > 0)
-        {
-            cleaned = store.RemoveIpsFromPool(ispKey, removeIps);
-        }
-    }
-
-    // 触发DNS更新
     try
     {
-        await dns.UpdateDnsAsync(report.Isp, report.Results);
+        var msg = await rounds.HandleReportAsync(report);
+        return ApiResponse<string>.Ok(msg);
     }
     catch (Exception ex)
     {
-        return ApiResponse<string>.Fail($"Results saved, but DNS update failed: {ex.Message}");
+        return ApiResponse<string>.Fail($"Results saved, but round finalization failed: {ex.Message}");
     }
-
-    var msg = "Report received, DNS update triggered";
-    if (cleaned > 0) msg += $", {cleaned} underperforming IPs removed from pool";
-    return ApiResponse<string>.Ok(msg);
 });
 
 // ============================================================
@@ -240,6 +221,14 @@ app.MapPost("/api/ippool/preview", async (FetchSource source, IpPoolService ipPo
 {
     var ips = await ipPool.FetchIpsFromSourceAsync(source);
     return ApiResponse<List<string>>.Ok(ips);
+});
+
+// ============================================================
+//  API: WebUI - 获取统一轮次状态
+// ============================================================
+app.MapGet("/api/rounds/status", (RoundCoordinatorService rounds) =>
+{
+    return ApiResponse<RoundStatusOverview>.Ok(rounds.GetStatusOverview());
 });
 
 // ============================================================

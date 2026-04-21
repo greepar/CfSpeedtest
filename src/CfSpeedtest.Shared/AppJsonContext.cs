@@ -24,8 +24,12 @@ namespace CfSpeedtest.Shared;
 [JsonSerializable(typeof(Dictionary<string, HuaweiDnsRecordConfig>))]
 [JsonSerializable(typeof(DnsUpdateTriggerRequest))]
 [JsonSerializable(typeof(DnsUpdateStatus))]
+[JsonSerializable(typeof(IspRoundStatus))]
+[JsonSerializable(typeof(RoundStatusOverview))]
 [JsonSerializable(typeof(List<DnsUpdateStatus>))]
+[JsonSerializable(typeof(List<IspRoundStatus>))]
 [JsonSerializable(typeof(ApiResponse<List<DnsUpdateStatus>>))]
+[JsonSerializable(typeof(ApiResponse<RoundStatusOverview>))]
 [JsonSerializable(typeof(ApiResponse<SpeedTestTask>))]
 [JsonSerializable(typeof(ApiResponse<ClientRegisterResponse>))]
 [JsonSerializable(typeof(ApiResponse<string>))]
@@ -38,6 +42,7 @@ namespace CfSpeedtest.Shared;
 [JsonSerializable(typeof(List<TestHistory>))]
 [JsonSerializable(typeof(List<ClientInfo>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(Dictionary<string, List<string>>))]
 public partial class AppJsonContext : JsonSerializerContext
 {
 }

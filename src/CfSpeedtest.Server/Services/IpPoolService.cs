@@ -21,6 +21,9 @@ public class IpPoolService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 启动时先清空 API 自动拉取池，再重新拉取，避免沿用上次缓存结果
+        _store.ClearApiIpPool();
+
         // 启动时立即拉取一次
         await RefreshFromApiAsync();
 

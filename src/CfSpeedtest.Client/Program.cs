@@ -28,7 +28,6 @@ if (!Enum.TryParse<IspType>(ispStr, true, out var isp))
 }
 
 var intervalMinutes = int.Parse(intervalStr);
-var currentIntervalMinutes = intervalMinutes;
 Console.WriteLine($"Server:   {serverUrl}");
 Console.WriteLine($"ISP:      {isp}");
 Console.WriteLine($"Name:     {clientName}");
@@ -79,7 +78,17 @@ while (true)
 
     try
     {
-        currentIntervalMinutes = await RunTestCycleAsync(serverUrl, clientId, isp, httpClient, currentIntervalMinutes);
+        var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, isp, httpClient, intervalMinutes);
+
+        if (oneshot) break;
+
+        if (retryDelayMinutes > 0)
+        {
+            Console.WriteLine($"Sleeping {retryDelayMinutes}min before next check...");
+            await Task.Delay(TimeSpan.FromMinutes(retryDelayMinutes));
+        }
+
+        continue;
     }
     catch (Exception ex)
     {
@@ -87,9 +96,8 @@ while (true)
     }
 
     if (oneshot) break;
-
-    Console.WriteLine($"Sleeping {currentIntervalMinutes}min before next cycle...");
-    await Task.Delay(TimeSpan.FromMinutes(currentIntervalMinutes));
+    Console.WriteLine($"Sleeping {intervalMinutes}min before next check...");
+    await Task.Delay(TimeSpan.FromMinutes(intervalMinutes));
 }
 
 return 0;
@@ -116,8 +124,18 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
     Console.WriteLine($"Got task {task.TaskId[..8]}: {task.IpAddresses.Count} IPs to test");
     Console.WriteLine($"Test URL template: {task.TestUrl}");
     Console.WriteLine($"Host: {task.TestHost}, Port: {task.TestPort}");
-    Console.WriteLine($"Next interval: {task.ClientIntervalMinutes}min");
+    Console.WriteLine($"Server interval: {task.ClientIntervalMinutes}min");
+    Console.WriteLine($"Scheduled start (UTC): {task.ScheduledAtUtc:yyyy-MM-dd HH:mm:ss}");
     Console.WriteLine();
+
+    var wait = task.ScheduledAtUtc - DateTime.UtcNow;
+    if (wait > TimeSpan.Zero)
+    {
+        Console.WriteLine($"Waiting {wait.TotalSeconds:F0}s for server-coordinated round start...");
+        await Task.Delay(wait);
+        Console.WriteLine();
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Round started.");
+    }
 
     var results = new List<IpTestResult>();
 
@@ -189,7 +207,7 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
     reportResp.EnsureSuccessStatusCode();
     Console.WriteLine("OK");
 
-    return task.ClientIntervalMinutes > 0 ? task.ClientIntervalMinutes : fallbackIntervalMinutes;
+    return 0;
 }
 
 // ============================================================

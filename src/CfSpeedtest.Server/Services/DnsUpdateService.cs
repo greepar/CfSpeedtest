@@ -171,9 +171,23 @@ public class DnsUpdateService : IHostedService, IDisposable
     {
         var config = _store.GetConfig();
         var hwConfig = config.HuaweiDns;
+        var ispKey = isp.ToString();
+
+        var aggregatedResults = bestResults
+            .OrderByDescending(r => r.Score)
+            .GroupBy(r => r.IpAddress)
+            .Select(g => g.First())
+            .Take(config.TopN)
+            .ToList();
+
+        if (aggregatedResults.Count == 0)
+        {
+            aggregatedResults = AggregateLatestResultsForIsp(isp, config.TopN);
+        }
 
         if (!hwConfig.Enabled)
         {
+            UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false, "华为云 DNS 未启用，当前仅展示本次汇总 TopN");
             _logger.LogDebug("Huawei DNS update is disabled, skipping for {Isp}", isp);
             return;
         }
@@ -181,16 +195,17 @@ public class DnsUpdateService : IHostedService, IDisposable
         // 如果配置了定时更新，则不在报告时立即触发（交给定时器）
         if (hwConfig.UpdateIntervalMinutes > 0)
         {
+            UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
+                $"已汇总本次 TopN，等待定时更新（{hwConfig.UpdateIntervalMinutes} 分钟间隔）");
             _logger.LogDebug("DNS auto-update interval is set ({Interval} min), skipping immediate update for {Isp}",
                 hwConfig.UpdateIntervalMinutes, isp);
             return;
         }
 
         // UpdateIntervalMinutes == 0 表示每次报告都立即更新
-        var ispKey = isp.ToString();
-        var aggregatedResults = AggregateLatestResultsForIsp(isp, config.TopN);
         if (aggregatedResults.Count == 0)
         {
+            UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false, "没有可用的测速结果");
             _logger.LogWarning("No IPs to update for ISP {Isp}", isp);
             return;
         }
@@ -331,6 +346,15 @@ public class DnsUpdateService : IHostedService, IDisposable
             LastUpdatedAt = DateTime.UtcNow,
         };
 
+        if (hwConfig.Records.TryGetValue(ispKey, out var previewRecordConfig))
+        {
+            status.Domain = previewRecordConfig.Domain;
+        }
+
+        status.Success = false;
+        status.Message = "已汇总本次 TopN，正在尝试更新 DNS";
+        _lastStatus[ispKey] = status;
+
         try
         {
             if (!hwConfig.Records.TryGetValue(ispKey, out var recordConfig)
@@ -395,6 +419,30 @@ public class DnsUpdateService : IHostedService, IDisposable
 
         _lastStatus[ispKey] = status;
         return status;
+    }
+
+    private void UpdatePreviewStatus(
+        string ispKey,
+        List<IpTestResult> testResults,
+        HuaweiDnsConfig hwConfig,
+        bool success,
+        string message)
+    {
+        var status = new DnsUpdateStatus
+        {
+            Isp = ispKey,
+            Results = testResults,
+            LastUpdatedAt = DateTime.UtcNow,
+            Success = success,
+            Message = message,
+        };
+
+        if (hwConfig.Records.TryGetValue(ispKey, out var recordConfig))
+        {
+            status.Domain = recordConfig.Domain;
+        }
+
+        _lastStatus[ispKey] = status;
     }
 
     /// <summary>

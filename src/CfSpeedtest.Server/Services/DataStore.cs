@@ -70,6 +70,29 @@ public class DataStore
         }
     }
 
+    /// <summary>
+    /// 清空 API 自动拉取得到的 IP 池，不影响手动维护的 IP。
+    /// </summary>
+    public void ClearApiIpPool(string? isp = null)
+    {
+        lock (_lock)
+        {
+            if (string.IsNullOrEmpty(isp))
+            {
+                foreach (var key in _apiIpPools.Keys.ToList())
+                {
+                    _apiIpPools[key] = [];
+                }
+            }
+            else
+            {
+                _apiIpPools[isp] = [];
+            }
+
+            PersistFile("ippool.json", _apiIpPools);
+        }
+    }
+
     public void ReplaceIpPool(string isp, IEnumerable<string> ips)
     {
         lock (_lock)

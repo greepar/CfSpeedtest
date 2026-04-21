@@ -229,6 +229,10 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 <div id="panel-dashboard" class="panel active">
     <div class="stats" id="stats-cards"></div>
     <div class="card">
+        <h2>统一轮次状态</h2>
+        <div id="round-status"></div>
+    </div>
+    <div class="card">
         <h2>最新测速结果</h2>
         <div id="latest-results"></div>
     </div>
@@ -481,6 +485,9 @@ const ISP_CLASSES = { 0: 'badge-telecom', 1: 'badge-unicom', 2: 'badge-mobile', 
 let currentIspTab = 'Telecom';
 let allIpPoolData = {};
 let serverConfigData = null;
+let roundStatusData = null;
+let roundCountdownTimer = null;
+let roundRefreshTimer = null;
 
 // ========== Tab switching ==========
 
@@ -491,6 +498,7 @@ function switchTab(name) {
     });
     document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
     document.getElementById('panel-' + name).classList.add('active');
+    if (name !== 'dashboard') stopDashboardAutoRefresh();
     if (name === 'dashboard') loadDashboard();
     if (name === 'history') loadHistory();
     if (name === 'clients') loadClients();
@@ -534,10 +542,11 @@ function fmtTime(s) {
 // ========== Dashboard ==========
 
 function loadDashboard() {
-    Promise.all([api('/api/clients'), api('/api/history?limit=20'), api('/api/ippool')]).then(function(res) {
+    Promise.all([api('/api/clients'), api('/api/history?limit=20'), api('/api/ippool'), api('/api/rounds/status')]).then(function(res) {
         var clients = res[0].data || [];
         var history = res[1].data || [];
         var ipData = res[2].data || {};
+        roundStatusData = res[3].data || null;
         var totalIps = 0;
         for (var k in ipData) { totalIps += (ipData[k] || []).length; }
 
@@ -550,6 +559,9 @@ function loadDashboard() {
             '<div class="stat-card"><div class="value">' + online + '</div><div class="label">在线</div></div>' +
             '<div class="stat-card"><div class="value">' + totalIps + '</div><div class="label">IP 池总数</div></div>' +
             '<div class="stat-card"><div class="value">' + history.length + '</div><div class="label">最近测速次数</div></div>';
+
+        renderRoundStatus(roundStatusData);
+        startDashboardAutoRefresh();
 
         if (history.length === 0) {
             document.getElementById('latest-results').innerHTML = '<div class="empty-state">暂无测速记录</div>';
@@ -573,6 +585,110 @@ function loadDashboard() {
         html += '</tbody></table>';
         document.getElementById('latest-results').innerHTML = html;
     });
+}
+
+function startDashboardAutoRefresh() {
+    if (roundCountdownTimer === null) {
+        roundCountdownTimer = setInterval(function() {
+            updateRoundCountdownOnly();
+        }, 1000);
+    }
+
+    if (roundRefreshTimer === null) {
+        roundRefreshTimer = setInterval(function() {
+            if (!document.getElementById('panel-dashboard').classList.contains('active')) return;
+            api('/api/rounds/status').then(function(r) {
+                if (r.success) {
+                    roundStatusData = r.data || null;
+                    renderRoundStatus(roundStatusData);
+                }
+            });
+        }, 10000);
+    }
+}
+
+function stopDashboardAutoRefresh() {
+    if (roundCountdownTimer !== null) {
+        clearInterval(roundCountdownTimer);
+        roundCountdownTimer = null;
+    }
+    if (roundRefreshTimer !== null) {
+        clearInterval(roundRefreshTimer);
+        roundRefreshTimer = null;
+    }
+}
+
+function renderRoundStatus(data) {
+    if (!data) {
+        document.getElementById('round-status').innerHTML = '<div class="empty-state">暂无轮次状态</div>';
+        return;
+    }
+
+    var html = '';
+
+    html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-width:220px;">' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">下一次统一开始时间</div>' +
+        '<div style="font-size:18px;font-weight:700;color:var(--accent);">' + fmtTime(data.nextRoundStartUtc) + '</div>' +
+        '<div id="round-next-countdown" style="font-size:12px;color:var(--text2);margin-top:4px;">倒计时：-</div>' +
+        '</div>' +
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-width:180px;">' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">统一轮询周期</div>' +
+        '<div style="font-size:18px;font-weight:700;color:var(--accent);">' + (data.clientIntervalMinutes || 0) + ' 分钟</div>' +
+        '</div>' +
+        '</div>';
+
+    var rows = data.isps || [];
+    if (rows.length === 0) {
+        html += '<div class="empty-state">暂无运营商轮次状态</div>';
+        document.getElementById('round-status').innerHTML = html;
+        return;
+    }
+
+    html += '<table><thead><tr><th>运营商</th><th>当前轮次 ID</th><th>统一开始时间</th><th>已分配 / 已上报</th><th>状态</th><th>收口截止</th></tr></thead><tbody>';
+    rows.forEach(function(r) {
+        var stateText = '待开始';
+        var stateBadge = '<span class="badge badge-offline">待开始</span>';
+        if (r.finalized) {
+            stateText = '已完成收口';
+            stateBadge = '<span class="badge badge-online">已完成收口</span>';
+        } else if (r.finalizing) {
+            stateText = '收口中';
+            stateBadge = '<span class="badge badge-mobile">收口中</span>';
+        } else if (r.reportedClients > 0 || r.assignedClients > 0) {
+            stateText = '收集中';
+            stateBadge = '<span class="badge badge-unicom">收集中</span>';
+        }
+
+        html += '<tr>' +
+            '<td><span class="badge ' + (ISP_CLASSES[r.isp] || '') + '">' + (ISP_NAMES[r.isp] || r.isp) + '</span></td>' +
+            '<td style="font-family:monospace;font-size:12px;">' + (r.taskId || '-') + '</td>' +
+            '<td>' + fmtTime(r.scheduledAtUtc) + '</td>' +
+            '<td>' + (r.assignedClients || 0) + ' / ' + (r.reportedClients || 0) + '</td>' +
+            '<td>' + stateBadge + '</td>' +
+            '<td>' + fmtTime(r.finalizeAfterUtc) + '</td>' +
+            '</tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('round-status').innerHTML = html;
+    updateRoundCountdownOnly();
+}
+
+function updateRoundCountdownOnly() {
+    if (!roundStatusData) return;
+    var el = document.getElementById('round-next-countdown');
+    if (!el) return;
+    var nextMs = new Date(roundStatusData.nextRoundStartUtc).getTime() - Date.now();
+    var countdown = nextMs > 0 ? formatCountdown(nextMs) : '已到开始时间';
+    el.textContent = '倒计时：' + countdown;
+}
+
+function formatCountdown(ms) {
+    var totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    var minutes = Math.floor(totalSeconds / 60);
+    var seconds = totalSeconds % 60;
+    if (minutes > 0) return minutes + '分 ' + seconds + '秒';
+    return seconds + '秒';
 }
 
 // ========== History ==========

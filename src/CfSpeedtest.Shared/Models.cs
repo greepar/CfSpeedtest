@@ -44,6 +44,9 @@ public class SpeedTestTask
 
     /// <summary>客户端下次轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;
+
+    /// <summary>服务端统一安排的本轮开始时间(UTC)</summary>
+    public DateTime ScheduledAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>
@@ -346,4 +349,30 @@ public class DnsUpdateStatus
     public DateTime? LastUpdatedAt { get; set; }
     public bool Success { get; set; }
     public string? Message { get; set; }
+}
+
+/// <summary>
+/// 单个运营商的统一轮次状态
+/// </summary>
+public class IspRoundStatus
+{
+    public string Isp { get; set; } = string.Empty;
+    public string TaskId { get; set; } = string.Empty;
+    public DateTime ScheduledAtUtc { get; set; }
+    public DateTime FinalizeAfterUtc { get; set; }
+    public int AssignedClients { get; set; }
+    public int ReportedClients { get; set; }
+    public bool Finalizing { get; set; }
+    public bool Finalized { get; set; }
+}
+
+/// <summary>
+/// WebUI 用的统一轮次概览状态
+/// </summary>
+public class RoundStatusOverview
+{
+    public DateTime ServerNowUtc { get; set; } = DateTime.UtcNow;
+    public DateTime NextRoundStartUtc { get; set; }
+    public int ClientIntervalMinutes { get; set; } = 60;
+    public List<IspRoundStatus> Isps { get; set; } = [];
 }
