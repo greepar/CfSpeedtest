@@ -145,7 +145,7 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         Success = true,
         Message = "Heartbeat received",
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
-        ForceFetchTask = rounds.ConsumeImmediateTrigger(client.Isp),
+        ForceFetchTask = rounds.ConsumeImmediateTrigger(req.ClientId, client.Isp),
         ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(req.ClientId),
         EffectiveIsp = client.Isp,
         EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
@@ -213,7 +213,7 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
                 Type = "heartbeat-ack",
                 ClientId = clientId,
                 HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
-                ForceFetchTask = rounds.ConsumeImmediateTrigger(client.Isp),
+                ForceFetchTask = rounds.ConsumeImmediateTrigger(clientId, client.Isp),
                 ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(clientId),
                 EffectiveIsp = client.Isp,
                 EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
@@ -443,6 +443,14 @@ app.MapPost("/api/clients/{clientId}/trigger-update", (string clientId, DataStor
 
     rounds.TriggerClientUpdate(clientId);
     return ApiResponse<string>.Ok("客户端将在下一次心跳后立即检查更新");
+});
+
+app.MapPost("/api/clients/{clientId}/trigger-test", (string clientId, RoundCoordinatorService rounds) =>
+{
+    var ok = rounds.TriggerImmediateRoundForClient(clientId);
+    return ok
+        ? ApiResponse<string>.Ok("客户端将在下一次心跳后立即重新测速")
+        : ApiResponse<string>.Fail("Client not found or not allowed");
 });
 
 app.MapPost("/api/clients/{clientId}/metadata", async (string clientId, ClientMetadataUpdateRequest req, DataStore store, ClientWsHub hub) =>

@@ -135,7 +135,7 @@ public class ClientRegisterResponse
     public string ClientId { get; set; } = string.Empty;
     public bool Success { get; set; }
     public string? Message { get; set; }
-    public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public int HeartbeatIntervalSeconds { get; set; } = 5;
     public IspType EffectiveIsp { get; set; }
     public string EffectiveName { get; set; } = string.Empty;
 }
@@ -159,7 +159,7 @@ public class ClientHeartbeatResponse
 {
     public bool Success { get; set; }
     public string? Message { get; set; }
-    public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public int HeartbeatIntervalSeconds { get; set; } = 5;
     public bool ForceFetchTask { get; set; }
     public bool ForceCheckUpdate { get; set; }
     public IspType EffectiveIsp { get; set; }
@@ -420,7 +420,7 @@ public class ServerConfig
     public int ClientIntervalMinutes { get; set; } = 60;
 
     /// <summary>客户端心跳间隔(秒)</summary>
-    public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public int HeartbeatIntervalSeconds { get; set; } = 5;
 
     /// <summary>最低下载速度阈值(KB/s)，低于该值的结果不会进入最终TopN</summary>
     public double MinDownloadSpeedKBps { get; set; }

@@ -623,7 +623,7 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     <input id="cfg-apiinterval" type="number" />
                 </div>
                 <div class="form-group">
-                    <label>客户端心跳间隔 (秒)</label>
+                    <label>客户端心跳间隔 (秒, HTTP/WS 回退)</label>
                     <input id="cfg-heartbeat-interval" type="number" min="5" />
                 </div>
             </div>
@@ -1136,6 +1136,7 @@ function loadClients() {
                 '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
                 '<td style="display:flex; gap:6px;">' +
                 '<button class="btn btn-secondary" onclick="editClientMetadata(\'' + c.clientId.replace(/'/g, "\\'") + '\', \'' + String(c.name || '').replace(/'/g, "\\'") + '\', \'' + String(c.isp || '').replace(/'/g, "\\'") + '\')">编辑</button>' +
+                '<button class="btn btn-secondary" onclick="triggerClientRetest(\'' + c.clientId.replace(/'/g, "\\'") + '\')">重新测速</button>' +
                 '<button class="btn btn-secondary" onclick="triggerClientUpdate(\'' + c.clientId.replace(/'/g, "\\'") + '\')">触发更新</button>' +
                 '<button class="btn danger-btn btn-icon" onclick="deleteClient(\'' + c.clientId.replace(/'/g, "\\'") + '\')">X</button>' +
                 '</td>' +
@@ -1453,6 +1454,24 @@ function triggerClientUpdate(clientId) {
         } else {
             toast(r.message || '触发失败', false);
         }
+    });
+}
+
+function triggerClientRetest(clientId) {
+    api('/api/clients/' + encodeURIComponent(clientId) + '/trigger-test', 'POST').then(function(r) {
+        if (r.success) {
+            toast(r.message || '已下发重新测速触发');
+            api('/api/rounds/status').then(function(rr) {
+                if (rr.success) {
+                    roundStatusData = rr.data || null;
+                    renderRoundStatus(roundStatusData);
+                }
+            });
+        } else {
+            toast(r.message || '触发失败', false);
+        }
+    }).catch(function(err) {
+        toast('触发失败: ' + err.message, false);
     });
 }
 
