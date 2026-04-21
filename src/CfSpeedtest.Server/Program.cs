@@ -83,8 +83,8 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
     var info = new ClientInfo
     {
         ClientId = clientId,
-        Isp = req.Isp,
-        Name = req.Name ?? $"{req.Isp}-{clientId[..6]}",
+        Isp = existing?.Isp ?? req.Isp,
+        Name = existing?.Name ?? (req.Name ?? $"{req.Isp}-{clientId[..6]}"),
         Version = string.IsNullOrWhiteSpace(req.Version) ? existing?.Version : req.Version,
         Platform = string.IsNullOrWhiteSpace(req.Platform) ? existing?.Platform : req.Platform,
         RegisteredAt = existing?.RegisteredAt ?? DateTime.UtcNow,
@@ -100,6 +100,8 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
         Success = true,
         Message = "Registered",
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
+        EffectiveIsp = info.Isp,
+        EffectiveName = info.Name ?? $"{info.Isp}-{clientId[..6]}",
     });
 });
 
@@ -121,6 +123,8 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         client = new ClientInfo
         {
             ClientId = req.ClientId,
+            Isp = req.Isp,
+            Name = string.IsNullOrWhiteSpace(req.Name) ? $"{req.Isp}-{req.ClientId[..6]}" : req.Name,
             RegisteredAt = DateTime.UtcNow,
             Allowed = true,
         };
@@ -130,8 +134,6 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         return ApiResponse<ClientHeartbeatResponse>.Fail("Client is not allowed to connect");
     }
 
-    client.Isp = req.Isp;
-    client.Name = string.IsNullOrWhiteSpace(req.Name) ? client.Name : req.Name;
     client.Version = string.IsNullOrWhiteSpace(req.Version) ? client.Version : req.Version;
     client.Platform = string.IsNullOrWhiteSpace(req.Platform) ? client.Platform : req.Platform;
     client.LastSeenAt = DateTime.UtcNow;
@@ -143,8 +145,10 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         Success = true,
         Message = "Heartbeat received",
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
-        ForceFetchTask = rounds.ConsumeImmediateTrigger(req.Isp),
+        ForceFetchTask = rounds.ConsumeImmediateTrigger(client.Isp),
         ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(req.ClientId),
+        EffectiveIsp = client.Isp,
+        EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
     });
 });
 
@@ -157,8 +161,7 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
     }
 
     var clientId = context.Request.Query["clientId"].ToString();
-    var ispText = context.Request.Query["isp"].ToString();
-    if (string.IsNullOrWhiteSpace(clientId) || !Enum.TryParse<IspType>(ispText, out var isp))
+    if (string.IsNullOrWhiteSpace(clientId))
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
         return;
@@ -179,7 +182,9 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
         Type = "hello",
         ClientId = clientId,
         HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
-        Message = "ws connected"
+        Message = "ws connected",
+        EffectiveIsp = client.Isp,
+        EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}"
     };
     await hub.SendAsync(clientId, hello, context.RequestAborted);
 
@@ -197,8 +202,6 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
             if (msg is null) continue;
 
             client = store.GetClient(clientId) ?? client;
-            client.Isp = isp;
-            client.Name = string.IsNullOrWhiteSpace(msg.Name) ? client.Name : msg.Name;
             client.Version = string.IsNullOrWhiteSpace(msg.Version) ? client.Version : msg.Version;
             client.Platform = string.IsNullOrWhiteSpace(msg.Platform) ? client.Platform : msg.Platform;
             client.LastSeenAt = DateTime.UtcNow;
@@ -210,8 +213,10 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
                 Type = "heartbeat-ack",
                 ClientId = clientId,
                 HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
-                ForceFetchTask = rounds.ConsumeImmediateTrigger(isp),
+                ForceFetchTask = rounds.ConsumeImmediateTrigger(client.Isp),
                 ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(clientId),
+                EffectiveIsp = client.Isp,
+                EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
             };
             await hub.SendAsync(clientId, response, context.RequestAborted);
         }
@@ -438,6 +443,36 @@ app.MapPost("/api/clients/{clientId}/trigger-update", (string clientId, DataStor
 
     rounds.TriggerClientUpdate(clientId);
     return ApiResponse<string>.Ok("客户端将在下一次心跳后立即检查更新");
+});
+
+app.MapPost("/api/clients/{clientId}/metadata", async (string clientId, ClientMetadataUpdateRequest req, DataStore store, ClientWsHub hub) =>
+{
+    if (!Enum.TryParse<IspType>(req.Isp, true, out var isp))
+        return ApiResponse<string>.Fail("Invalid ISP");
+
+    var name = req.Name.Trim();
+    if (string.IsNullOrWhiteSpace(name))
+        return ApiResponse<string>.Fail("Name is required");
+
+    var updated = store.UpdateClientMetadata(clientId, isp, name);
+    if (!updated)
+        return ApiResponse<string>.Fail("Client not found");
+
+    var client = store.GetClient(clientId);
+    if (client is not null)
+    {
+        await hub.SendAsync(clientId, new ClientWsMessage
+        {
+            Type = "metadata-update",
+            ClientId = clientId,
+            HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
+            Message = "client metadata updated by server",
+            EffectiveIsp = client.Isp,
+            EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
+        });
+    }
+
+    return ApiResponse<string>.Ok("Client metadata updated");
 });
 
 // ============================================================

@@ -12,6 +12,7 @@ namespace CfSpeedtest.Shared;
 [JsonSerializable(typeof(ClientWsMessage))]
 [JsonSerializable(typeof(ClientReservationRequest))]
 [JsonSerializable(typeof(ClientReservationResponse))]
+[JsonSerializable(typeof(ClientMetadataUpdateRequest))]
 [JsonSerializable(typeof(ClientUpdateInfo))]
 [JsonSerializable(typeof(ClientUpdatePackageStatus))]
 [JsonSerializable(typeof(ClientUpdateOverview))]

@@ -110,6 +110,11 @@ log "下载地址: ${DOWNLOAD_URL}"
 ensure_dependencies
 mkdir -p "$INSTALL_DIR"
 
+if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+  log "检测到已存在的 systemd 服务，准备覆盖更新..."
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+fi
+
 log "下载客户端..."
 curl -fL --retry 3 --connect-timeout 15 -o "$ZIP_PATH" "$DOWNLOAD_URL"
 

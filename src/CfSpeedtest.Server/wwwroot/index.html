@@ -959,6 +959,11 @@ function renderRoundStatus(data) {
         '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">统一轮询周期</div>' +
         '<div style="font-size:18px;font-weight:700;color:var(--accent);">' + (data.clientIntervalMinutes || 0) + ' 分钟</div>' +
         '</div>' +
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-width:220px;display:flex;flex-direction:column;justify-content:center;gap:8px;">' +
+        '<div style="font-size:12px;color:var(--text2);">手动下发测速指令</div>' +
+        '<button class="btn btn-primary" type="button" onclick="triggerManualRound()">立即通知在线客户端测速</button>' +
+        '<div style="font-size:12px;color:var(--text2);">在线客户端会在下一次心跳后立刻拉取任务</div>' +
+        '</div>' +
         '</div>';
 
     var rows = data.isps || [];
@@ -1012,6 +1017,24 @@ function formatCountdown(ms) {
     var seconds = totalSeconds % 60;
     if (minutes > 0) return minutes + '分 ' + seconds + '秒';
     return seconds + '秒';
+}
+
+function triggerManualRound() {
+    toast('正在下发测速指令...');
+    api('/api/dns/trigger-test', 'POST', {}).then(function(r) {
+        if (r.success) {
+            toast(r.message || '测速触发已下发');
+            return api('/api/rounds/status');
+        }
+        throw new Error(r.message || '测速触发失败');
+    }).then(function(r) {
+        if (r && r.success) {
+            roundStatusData = r.data || null;
+            renderRoundStatus(roundStatusData);
+        }
+    }).catch(function(err) {
+        toast(err.message || '测速触发失败', false);
+    });
 }
 
 // ========== History ==========
@@ -1084,6 +1107,7 @@ function loadClients() {
                 '<td>' + fmtTime(c.registeredAt) + '</td>' +
                 '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
                 '<td style="display:flex; gap:6px;">' +
+                '<button class="btn btn-secondary" onclick="editClientMetadata(\'' + c.clientId.replace(/'/g, "\\'") + '\', \'' + String(c.name || '').replace(/'/g, "\\'") + '\', \'' + String(c.isp || '').replace(/'/g, "\\'") + '\')">编辑</button>' +
                 '<button class="btn btn-secondary" onclick="triggerClientUpdate(\'' + c.clientId.replace(/'/g, "\\'") + '\')">触发更新</button>' +
                 '<button class="btn danger-btn btn-icon" onclick="deleteClient(\'' + c.clientId.replace(/'/g, "\\'") + '\')">X</button>' +
                 '</td>' +
@@ -1157,6 +1181,25 @@ function buildInstallScriptUrl(params) {
 function buildInstallOneLiner(url, params) {
     if (!url) return '';
 
+    if (currentInstallScriptPlatform === 'windows') {
+        var psArgs = [];
+        psArgs.push('-ServerUrl "' + psEscape(params.serverUrl) + '"');
+        psArgs.push('-ClientId "' + psEscape(params.clientId) + '"');
+        psArgs.push('-Isp "' + psEscape(params.isp) + '"');
+        psArgs.push('-ClientName "' + psEscape(params.name) + '"');
+        psArgs.push('-Repository "' + psEscape((serverConfigData.clientUpdateRepository || '').trim()) + '"');
+        psArgs.push('-ReleaseTag "' + psEscape((serverConfigData.clientUpdateReleaseTag || '').trim()) + '"');
+        if ((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
+            psArgs.push('-GhProxyPrefix "' + psEscape((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) + '"');
+        }
+
+        return 'powershell -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP \'install-cfspeedtest-client.ps1\'; irm \'' +
+            url.replace(/'/g, "''") +
+            '\' -OutFile $tmp; & powershell -ExecutionPolicy Bypass -File $tmp ' +
+            psArgs.join(' ') +
+            '"';
+    }
+
     var suffix = [];
     suffix.push('--server ' + shellQuote(params.serverUrl));
     suffix.push('--client-id ' + shellQuote(params.clientId));
@@ -1168,19 +1211,15 @@ function buildInstallOneLiner(url, params) {
         suffix.push('--gh-proxy-prefix ' + shellQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
     }
 
-    if (currentInstallScriptPlatform === 'windows') {
-        return 'powershell -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP \'install-cfspeedtest-client.ps1\'; irm \'' +
-            url.replace(/'/g, "''") +
-            '\' -OutFile $tmp; & powershell -ExecutionPolicy Bypass -File $tmp ' +
-            suffix.map(function(x) { return x.replace(/'/g, "''"); }).join(' ') +
-            '"';
-    }
-
     return 'wget -qO- "' + url + '" | sudo bash -s -- ' + suffix.join(' ');
 }
 
 function shellQuote(value) {
     return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
+}
+
+function psEscape(value) {
+    return String(value || '').replace(/"/g, '""');
 }
 
 function refreshInstallScript() {
@@ -1312,6 +1351,37 @@ function toggleClientAllowed(btn) {
     api('/api/clients/' + encodeURIComponent(clientId) + '/allow?allowed=' + allowed, 'POST').then(function(r) {
         if (r.success) {
             toast('客户端连接权限已更新');
+            loadClients();
+        } else {
+            toast(r.message || '更新失败', false);
+        }
+    });
+}
+
+function editClientMetadata(clientId, currentName, currentIsp) {
+    var name = prompt('请输入新的客户端名称', currentName || '');
+    if (name === null) return;
+    name = name.trim();
+    if (!name) {
+        toast('客户端名称不能为空', false);
+        return;
+    }
+
+    var isp = prompt('请输入新的运营商（Telecom / Unicom / Mobile）', currentIsp || 'Telecom');
+    if (isp === null) return;
+    isp = isp.trim();
+    if (!/^(Telecom|Unicom|Mobile)$/i.test(isp)) {
+        toast('运营商只能是 Telecom / Unicom / Mobile', false);
+        return;
+    }
+
+    isp = isp.charAt(0).toUpperCase() + isp.slice(1).toLowerCase();
+    api('/api/clients/' + encodeURIComponent(clientId) + '/metadata', 'POST', {
+        name: name,
+        isp: isp
+    }).then(function(r) {
+        if (r.success) {
+            toast('客户端名称和运营商已更新，在线客户端会立即或在下次心跳时同步');
             loadClients();
         } else {
             toast(r.message || '更新失败', false);

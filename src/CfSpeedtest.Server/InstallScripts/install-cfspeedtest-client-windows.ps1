@@ -84,8 +84,12 @@ if (-not (Test-Path $nssmExe)) {
 $argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service"
 
 Write-Log '安装/更新 Windows Service...'
-& $nssmExe stop $serviceName | Out-Null
-& $nssmExe remove $serviceName confirm | Out-Null
+$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($null -ne $existingService) {
+    Write-Log '检测到已存在的 Windows Service，准备覆盖更新...'
+    & $nssmExe stop $serviceName | Out-Null
+    & $nssmExe remove $serviceName confirm | Out-Null
+}
 
 & $nssmExe install $serviceName $exePath $argList | Out-Null
 & $nssmExe set $serviceName AppDirectory $installDir | Out-Null

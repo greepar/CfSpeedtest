@@ -24,7 +24,7 @@ CleanupOldFiles();
 var serverUrl = GetArg(args, "server", "http://127.0.0.1:5000");
 var explicitClientId = GetArg(args, "client-id", "");
 var ispStr = GetArg(args, "isp", "Telecom");
-var clientName = GetArg(args, "name", Environment.MachineName);
+var configuredClientName = GetArg(args, "name", Environment.MachineName);
 var intervalStr = GetArg(args, "interval", "60"); // 默认60分钟
 var autoUpdate = !HasFlag(args, "disable-auto-update");
 var isService = HasFlag(args, "service");
@@ -32,16 +32,18 @@ var oneshot = HasFlag(args, "once");
 var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
 var clientPlatform = DetectClientPlatform();
 
-if (!Enum.TryParse<IspType>(ispStr, true, out var isp))
+if (!Enum.TryParse<IspType>(ispStr, true, out var configuredIsp))
 {
     Console.WriteLine($"Invalid ISP: {ispStr}, options: Telecom, Unicom, Mobile");
     return 1;
 }
 
+var runtimeProfile = new ClientRuntimeProfile(configuredIsp, configuredClientName);
+
 var intervalMinutes = int.Parse(intervalStr);
 Console.WriteLine($"Server:   {serverUrl}");
-Console.WriteLine($"ISP:      {isp}");
-Console.WriteLine($"Name:     {clientName}");
+Console.WriteLine($"ISP:      {runtimeProfile.Isp}");
+Console.WriteLine($"Name:     {runtimeProfile.Name}");
 Console.WriteLine($"Version:  {currentVersion}");
 Console.WriteLine($"Platform: {clientPlatform}");
 Console.WriteLine($"Default interval: {intervalMinutes}min");
@@ -77,8 +79,8 @@ try
     var regReq = new ClientRegisterRequest
     {
         ClientId = localState.ClientId,
-        Isp = isp,
-        Name = clientName,
+        Isp = runtimeProfile.Isp,
+        Name = runtimeProfile.Name,
         Version = currentVersion,
         Platform = clientPlatform,
     };
@@ -98,6 +100,7 @@ try
     heartbeatIntervalSeconds = regResult.Data.HeartbeatIntervalSeconds > 0
         ? regResult.Data.HeartbeatIntervalSeconds
         : heartbeatIntervalSeconds;
+    ApplyAuthoritativeClientMetadata(runtimeProfile, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName);
     localState.ClientId = clientId;
     SaveClientState(stateFile, localState);
     Console.WriteLine($"Registered as: {clientId}");
@@ -110,7 +113,7 @@ catch (Exception ex)
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, autoUpdate, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -120,7 +123,7 @@ while (true)
 
     try
     {
-        var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, isp, httpClient, intervalMinutes);
+        var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, httpClient, intervalMinutes);
 
         if (oneshot) break;
 
@@ -149,7 +152,7 @@ return 0;
 // ============================================================
 //  核心测速逻辑
 // ============================================================
-static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspType isp,
+static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, ClientRuntimeProfile runtimeProfile,
     HttpClient httpClient, int fallbackIntervalMinutes)
 {
     // 1. 获取任务
@@ -227,7 +230,7 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
 
         if (pendingIps.Count == 0)
         {
-            var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, isp, testedIps, httpClient);
+            var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, httpClient);
             foreach (var extraIp in additionalIps)
             {
                 if (!testedIps.Contains(extraIp))
@@ -259,7 +262,7 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, IspT
     {
         TaskId = task.TaskId,
         ClientId = clientId,
-        Isp = isp,
+        Isp = runtimeProfile.Isp,
         Results = topResults,
         CompletedAt = DateTime.UtcNow,
     };
@@ -423,8 +426,7 @@ static async Task<List<string>> FetchAdditionalIpsAsync(
 static Task StartHeartbeatLoopAsync(
     string serverUrl,
     string clientId,
-    IspType isp,
-    string clientName,
+    ClientRuntimeProfile runtimeProfile,
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
@@ -435,7 +437,7 @@ static Task StartHeartbeatLoopAsync(
 {
     return Task.Run(async () =>
     {
-        var wsOk = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
+        var wsOk = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
         if (wsOk)
             return;
 
@@ -446,11 +448,12 @@ static Task StartHeartbeatLoopAsync(
         {
             try
             {
+                var snapshot = runtimeProfile.GetSnapshot();
                 var req = new ClientHeartbeatRequest
                 {
                     ClientId = clientId,
-                    Isp = isp,
-                    Name = clientName,
+                    Isp = snapshot.Isp,
+                    Name = snapshot.Name,
                     Version = currentVersion,
                     Platform = clientPlatform,
                 };
@@ -465,6 +468,7 @@ static Task StartHeartbeatLoopAsync(
                 var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
+                    ApplyAuthoritativeClientMetadata(runtimeProfile, result.Data.EffectiveIsp, result.Data.EffectiveName);
                     if (result.Data.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
                     {
                         immediateFetchSignal.Release();
@@ -495,7 +499,7 @@ static Task StartHeartbeatLoopAsync(
 
         if (!cancellationToken.IsCancellationRequested)
         {
-            await StartHeartbeatLoopAsync(serverUrl, clientId, isp, clientName, currentVersion, clientPlatform, autoUpdate, httpClient, intervalSeconds, immediateFetchSignal, cancellationToken);
+            await StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, httpClient, intervalSeconds, immediateFetchSignal, cancellationToken);
         }
     }, cancellationToken);
 }
@@ -503,8 +507,7 @@ static Task StartHeartbeatLoopAsync(
 static async Task<bool> TryStartWebSocketHeartbeatAsync(
     string serverUrl,
     string clientId,
-    IspType isp,
-    string clientName,
+    ClientRuntimeProfile runtimeProfile,
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
@@ -514,7 +517,7 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
     try
     {
         using var ws = new ClientWebSocket();
-        var wsUrl = BuildWebSocketUrl(serverUrl, clientId, isp);
+        var wsUrl = BuildWebSocketUrl(serverUrl, clientId, runtimeProfile.Isp);
         await ws.ConnectAsync(new Uri(wsUrl), cancellationToken);
         Console.WriteLine("WebSocket heartbeat connected.");
 
@@ -524,12 +527,13 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
 
         while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
         {
+            var snapshot = runtimeProfile.GetSnapshot();
             var heartbeat = new ClientWsMessage
             {
                 Type = "heartbeat",
                 ClientId = clientId,
-                Isp = isp,
-                Name = clientName,
+                Isp = snapshot.Isp,
+                Name = snapshot.Name,
                 Version = currentVersion,
                 Platform = clientPlatform,
             };
@@ -545,6 +549,7 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
             var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
             if (msg is not null)
             {
+                ApplyAuthoritativeClientMetadata(runtimeProfile, msg.EffectiveIsp, msg.EffectiveName);
                 intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
                 if (msg.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
                     immediateFetchSignal.Release();
@@ -574,6 +579,20 @@ static string BuildWebSocketUrl(string serverUrl, string clientId, IspType isp)
     var baseUri = new Uri(serverUrl);
     var scheme = baseUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
     return $"{scheme}://{baseUri.Authority}/api/client/ws?clientId={Uri.EscapeDataString(clientId)}&isp={Uri.EscapeDataString(isp.ToString())}";
+}
+
+static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile, IspType effectiveIsp, string? effectiveName)
+{
+    if (string.IsNullOrWhiteSpace(effectiveName))
+    {
+        return;
+    }
+
+    var changed = runtimeProfile.Update(effectiveIsp, effectiveName);
+    if (changed)
+    {
+        Console.WriteLine($"Server metadata updated: ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}");
+    }
 }
 
 static async Task WaitForNextCheckAsync(TimeSpan delay, SemaphoreSlim immediateFetchSignal)
@@ -853,4 +872,53 @@ static void TryDeleteFile(string? path)
             File.Delete(path);
     }
     catch { }
+}
+
+sealed class ClientRuntimeProfile
+{
+    private readonly Lock _lock = new();
+    private IspType _isp;
+    private string _name;
+
+    public ClientRuntimeProfile(IspType isp, string name)
+    {
+        _isp = isp;
+        _name = name;
+    }
+
+    public IspType Isp
+    {
+        get
+        {
+            lock (_lock) return _isp;
+        }
+    }
+
+    public string Name
+    {
+        get
+        {
+            lock (_lock) return _name;
+        }
+    }
+
+    public (IspType Isp, string Name) GetSnapshot()
+    {
+        lock (_lock) return (_isp, _name);
+    }
+
+    public bool Update(IspType isp, string name)
+    {
+        lock (_lock)
+        {
+            if (_isp == isp && string.Equals(_name, name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            _isp = isp;
+            _name = name;
+            return true;
+        }
+    }
 }

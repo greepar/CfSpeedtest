@@ -193,6 +193,20 @@ public class DataStore
         return true;
     }
 
+    public bool UpdateClientMetadata(string clientId, IspType isp, string name)
+    {
+        if (!_clients.TryGetValue(clientId, out var client))
+        {
+            return false;
+        }
+
+        client.Isp = isp;
+        client.Name = name;
+        _clients[clientId] = client;
+        PersistFile("clients.json", _clients.Values.ToList());
+        return true;
+    }
+
     // ===== History =====
     public List<TestHistory> GetHistory(int limit = 100)
     {

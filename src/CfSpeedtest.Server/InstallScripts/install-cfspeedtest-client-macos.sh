@@ -69,6 +69,12 @@ log "平台: ${RID}"
 log "下载地址: ${DOWNLOAD_URL}"
 
 mkdir -p "$INSTALL_DIR"
+
+if launchctl print "system/${PLIST_NAME}" >/dev/null 2>&1; then
+  log "检测到已存在的 launchd 服务，准备覆盖更新..."
+  launchctl bootout "system/${PLIST_NAME}" >/dev/null 2>&1 || true
+fi
+
 curl -fL --retry 3 --connect-timeout 15 -o "$ZIP_PATH" "$DOWNLOAD_URL"
 unzip -oq "$ZIP_PATH" -d "$STAGE_DIR"
 cp -fR "$STAGE_DIR"/. "$INSTALL_DIR"/

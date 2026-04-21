@@ -136,6 +136,8 @@ public class ClientRegisterResponse
     public bool Success { get; set; }
     public string? Message { get; set; }
     public int HeartbeatIntervalSeconds { get; set; } = 30;
+    public IspType EffectiveIsp { get; set; }
+    public string EffectiveName { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -160,6 +162,8 @@ public class ClientHeartbeatResponse
     public int HeartbeatIntervalSeconds { get; set; } = 30;
     public bool ForceFetchTask { get; set; }
     public bool ForceCheckUpdate { get; set; }
+    public IspType EffectiveIsp { get; set; }
+    public string EffectiveName { get; set; } = string.Empty;
 }
 
 public class ClientWsMessage
@@ -174,6 +178,8 @@ public class ClientWsMessage
     public bool ForceFetchTask { get; set; }
     public bool ForceCheckUpdate { get; set; }
     public string? Message { get; set; }
+    public IspType EffectiveIsp { get; set; }
+    public string? EffectiveName { get; set; }
 }
 
 /// <summary>
@@ -193,6 +199,12 @@ public class ClientReservationResponse
 {
     public string ClientId { get; set; } = string.Empty;
     public string? Message { get; set; }
+}
+
+public class ClientMetadataUpdateRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public string Isp { get; set; } = string.Empty;
 }
 
 /// <summary>
