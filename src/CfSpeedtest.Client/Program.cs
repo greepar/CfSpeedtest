@@ -6,6 +6,7 @@ using System.Net.WebSockets;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -155,34 +156,39 @@ return 0;
 static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, ClientRuntimeProfile runtimeProfile,
     HttpClient httpClient, int fallbackIntervalMinutes)
 {
-    // 1. 获取任务
-    var taskResp = await httpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
-    taskResp.EnsureSuccessStatusCode();
-    var taskBody = await taskResp.Content.ReadAsStringAsync();
-    var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
-
-    if (taskResult?.Success != true || taskResult.Data is null)
+    // 1. 获取任务：服务端真正到点才下发，不再提前拿任务本地等待
+    SpeedTestTask? task = null;
+    while (task is null)
     {
-        Console.WriteLine($"No task available: {taskResult?.Message}");
+        var taskResp = await httpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
+        taskResp.EnsureSuccessStatusCode();
+        var taskBody = await taskResp.Content.ReadAsStringAsync();
+        var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
+
+        if (taskResult?.Success == true && taskResult.Data is not null)
+        {
+            task = taskResult.Data;
+            break;
+        }
+
+        var message = taskResult?.Message ?? "No task available";
+        Console.WriteLine($"No task available: {message}");
+
+        var match = Regex.Match(message, @"Retry after\s+(\d+)\s+seconds", RegexOptions.IgnoreCase);
+        if (match.Success && int.TryParse(match.Groups[1].Value, out var retrySeconds))
+        {
+            await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, retrySeconds)));
+            continue;
+        }
+
         return fallbackIntervalMinutes;
     }
 
-    var task = taskResult.Data;
     Console.WriteLine($"Got task {task.TaskId[..8]}: {task.IpAddresses.Count} IPs to test");
     Console.WriteLine($"Test URL template: {task.TestUrl}");
     Console.WriteLine($"Host: {task.TestHost}, Port: {task.TestPort}");
     Console.WriteLine($"Server interval: {task.ClientIntervalMinutes}min");
-    Console.WriteLine($"Scheduled start (UTC): {task.ScheduledAtUtc:yyyy-MM-dd HH:mm:ss}");
     Console.WriteLine();
-
-    var wait = task.ScheduledAtUtc - DateTime.UtcNow;
-    if (wait > TimeSpan.Zero)
-    {
-        Console.WriteLine($"Waiting {wait.TotalSeconds:F0}s for server-coordinated round start...");
-        await Task.Delay(wait);
-        Console.WriteLine();
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Round started.");
-    }
 
     var allResults = new List<IpTestResult>();
     var testedIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -551,7 +557,7 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
             {
                 ApplyAuthoritativeClientMetadata(runtimeProfile, msg.EffectiveIsp, msg.EffectiveName);
                 intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
-                if (msg.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
+                if ((msg.ForceFetchTask || string.Equals(msg.Type, "trigger-test", StringComparison.OrdinalIgnoreCase)) && immediateFetchSignal.CurrentCount == 0)
                     immediateFetchSignal.Release();
                 if (msg.ForceCheckUpdate)
                 {

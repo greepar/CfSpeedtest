@@ -1003,6 +1003,8 @@ function renderRoundStatus(data) {
 
     html += '<table><thead><tr><th>运营商</th><th>当前轮次 ID</th><th>统一开始时间</th><th>已分配 / 已上报</th><th>状态</th><th>收口截止</th></tr></thead><tbody>';
     rows.forEach(function(r) {
+        var scheduledAt = new Date(r.scheduledAtUtc).getTime();
+        var hasStarted = !isNaN(scheduledAt) && Date.now() >= scheduledAt;
         var stateText = '待开始';
         var stateBadge = '<span class="badge badge-offline">待开始</span>';
         if (r.finalized) {
@@ -1011,9 +1013,12 @@ function renderRoundStatus(data) {
         } else if (r.finalizing) {
             stateText = '收口中';
             stateBadge = '<span class="badge badge-mobile">收口中</span>';
-        } else if (r.reportedClients > 0 || r.assignedClients > 0) {
+        } else if (hasStarted && (r.reportedClients > 0 || r.assignedClients > 0)) {
             stateText = '收集中';
             stateBadge = '<span class="badge badge-unicom">收集中</span>';
+        } else if (!hasStarted && r.assignedClients > 0) {
+            stateText = '已分配待开始';
+            stateBadge = '<span class="badge badge-offline">已分配待开始</span>';
         }
 
         html += '<tr>' +

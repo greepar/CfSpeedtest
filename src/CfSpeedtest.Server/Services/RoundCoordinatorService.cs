@@ -72,12 +72,13 @@ public class RoundCoordinatorService : BackgroundService
         }
     }
 
-    public void TriggerImmediateRound(string? ispFilter)
+    public List<string> TriggerImmediateRound(string? ispFilter)
     {
         var config = _store.GetConfig();
         var nowUtc = DateTime.UtcNow;
         var activeThreshold = nowUtc.AddMinutes(-5);
         var clients = _store.GetClients();
+        var targetClientIds = new List<string>();
 
         lock (_lock)
         {
@@ -104,20 +105,26 @@ public class RoundCoordinatorService : BackgroundService
                 foreach (var client in clients.Where(c => c.Isp == ispEnum && c.Allowed && c.LastSeenAt >= activeThreshold))
                 {
                     state.PendingTriggerClients.Add(client.ClientId);
+                    targetClientIds.Add(client.ClientId);
                 }
 
                 _rounds[isp] = state;
             }
         }
+
+        return targetClientIds;
     }
 
-    public bool TriggerImmediateRoundForClient(string clientId)
+    public bool TriggerImmediateRoundForClient(string clientId, out IspType isp)
     {
         var config = _store.GetConfig();
         var nowUtc = DateTime.UtcNow;
         var client = _store.GetClient(clientId);
+        isp = default;
         if (client is null || !client.Allowed)
             return false;
+
+        isp = client.Isp;
 
         lock (_lock)
         {

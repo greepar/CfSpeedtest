@@ -445,9 +445,27 @@ app.MapPost("/api/clients/{clientId}/trigger-update", (string clientId, DataStor
     return ApiResponse<string>.Ok("客户端将在下一次心跳后立即检查更新");
 });
 
-app.MapPost("/api/clients/{clientId}/trigger-test", (string clientId, RoundCoordinatorService rounds) =>
+app.MapPost("/api/clients/{clientId}/trigger-test", async (string clientId, RoundCoordinatorService rounds, ClientWsHub hub, DataStore store) =>
 {
-    var ok = rounds.TriggerImmediateRoundForClient(clientId);
+    var ok = rounds.TriggerImmediateRoundForClient(clientId, out var isp);
+    if (ok)
+    {
+        var client = store.GetClient(clientId);
+        if (client is not null)
+        {
+            await hub.SendAsync(clientId, new ClientWsMessage
+            {
+                Type = "trigger-test",
+                ClientId = clientId,
+                HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
+                ForceFetchTask = true,
+                EffectiveIsp = isp,
+                EffectiveName = client.Name ?? $"{isp}-{clientId[..6]}",
+                Message = "manual retest triggered by server"
+            });
+        }
+    }
+
     return ok
         ? ApiResponse<string>.Ok("客户端将在下一次心跳后立即重新测速")
         : ApiResponse<string>.Fail("Client not found or not allowed");
@@ -499,8 +517,15 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
     store.UpsertClient(client);
 
     var config = store.GetConfig();
-    var ips = ipPool.GetBatch(client.Isp.ToString());
     var round = rounds.RegisterClient(client.Isp, clientId);
+
+    var wait = round.ScheduledAtUtc - DateTime.UtcNow;
+    if (wait > TimeSpan.Zero)
+    {
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail($"Round not started yet. Retry after {Math.Ceiling(wait.TotalSeconds)} seconds."));
+    }
+
+    var ips = ipPool.GetBatch(client.Isp.ToString());
 
     if (ips.Count == 0)
         return Results.Json(ApiResponse<SpeedTestTask>.Fail($"No IPs in pool for ISP {client.Isp}"));
@@ -766,9 +791,26 @@ app.MapPost("/api/dns/update", async (DnsUpdateTriggerRequest? req, DnsUpdateSer
     return ApiResponse<List<DnsUpdateStatus>>.Ok(results);
 });
 
-app.MapPost("/api/dns/trigger-test", (DnsUpdateTriggerRequest? req, RoundCoordinatorService rounds) =>
+app.MapPost("/api/dns/trigger-test", async (DnsUpdateTriggerRequest? req, RoundCoordinatorService rounds, ClientWsHub hub, DataStore store) =>
 {
-    rounds.TriggerImmediateRound(req?.Isp);
+    var clientIds = rounds.TriggerImmediateRound(req?.Isp);
+    foreach (var clientId in clientIds)
+    {
+        var client = store.GetClient(clientId);
+        if (client is null) continue;
+
+        await hub.SendAsync(clientId, new ClientWsMessage
+        {
+            Type = "trigger-test",
+            ClientId = clientId,
+            HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
+            ForceFetchTask = true,
+            EffectiveIsp = client.Isp,
+            EffectiveName = client.Name ?? $"{client.Isp}-{clientId[..6]}",
+            Message = "manual round triggered by server"
+        });
+    }
+
     return ApiResponse<string>.Ok("测速触发已下发，在线客户端将在下一次心跳后立即拉取任务并开始测速");
 });
 
