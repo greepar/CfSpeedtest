@@ -139,10 +139,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.*
+          files: artifacts/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
