@@ -41,4 +41,30 @@ public class ClientWsHub
         await conn.Socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
         return true;
     }
+
+    public async Task CloseAllAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken = default)
+    {
+        var connections = _connections.ToArray();
+        _connections.Clear();
+
+        foreach (var pair in connections)
+        {
+            var socket = pair.Value.Socket;
+            try
+            {
+                if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
+                {
+                    await socket.CloseAsync(closeStatus, statusDescription, cancellationToken);
+                }
+            }
+            catch
+            {
+                // ignore shutdown-time socket errors
+            }
+            finally
+            {
+                socket.Dispose();
+            }
+        }
+    }
 }

@@ -4,6 +4,7 @@ using CfSpeedtest.Server.Services;
 using CfSpeedtest.Shared;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
 var clientUpdatesDir = Path.Combine(builder.Environment.ContentRootPath, "client-updates");
@@ -12,6 +13,10 @@ Directory.CreateDirectory(clientUpdatesDir);
 builder.Services.Configure<JsonOptions>(o =>
 {
     o.SerializerOptions.TypeInfoResolverChain.Add(AppJsonContext.Default);
+});
+builder.Services.Configure<HostOptions>(o =>
+{
+    o.ShutdownTimeout = TimeSpan.FromSeconds(5);
 });
 
 builder.Services.AddSingleton<DataStore>();
@@ -27,6 +32,21 @@ builder.Services.AddHttpClient();
 
 var app = builder.Build();
 app.Services.GetRequiredService<WebUiAuthService>().EnsureInitialized(app.Services.GetRequiredService<DataStore>());
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+    try
+    {
+        app.Services.GetRequiredService<ClientWsHub>()
+            .CloseAllAsync(WebSocketCloseStatus.EndpointUnavailable, "server shutting down", cts.Token)
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch
+    {
+        // ignore shutdown-time websocket close failures
+    }
+});
 
 app.Use(async (context, next) =>
 {
@@ -226,7 +246,8 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
         hub.RemoveConnection(clientId, socket);
         if (socket.State == WebSocketState.Open)
         {
-            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", CancellationToken.None);
+            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", closeCts.Token);
         }
     }
 });

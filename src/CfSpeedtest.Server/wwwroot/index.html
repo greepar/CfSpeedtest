@@ -978,8 +978,14 @@ function renderRoundStatus(data) {
     }
 
     var html = '';
+    var hasCurrentRound = !!data.currentRoundStartUtc;
 
     html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-width:220px;">' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">当前轮次开始时间</div>' +
+        '<div style="font-size:18px;font-weight:700;color:var(--accent);">' + (hasCurrentRound ? fmtTime(data.currentRoundStartUtc) : '-') + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + (hasCurrentRound ? '当前存在进行中/待收口轮次' : '当前没有活跃轮次') + '</div>' +
+        '</div>' +
         '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-width:220px;">' +
         '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">下一次统一开始时间</div>' +
         '<div style="font-size:18px;font-weight:700;color:var(--accent);">' + fmtTime(data.nextRoundStartUtc) + '</div>' +

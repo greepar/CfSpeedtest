@@ -115,26 +115,20 @@ catch (Exception ex)
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
 var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
-var currentIntervalMinutes = Math.Max(1, intervalMinutes);
 
 // ===== 主循环 =====
 while (true)
 {
     Console.WriteLine();
+    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Waiting for server trigger...");
+    await WaitForFetchSignalAsync(immediateFetchSignal);
     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Fetching task...");
 
     try
     {
-        var retryDelayMinutes = await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, httpClient, currentIntervalMinutes);
-        currentIntervalMinutes = Math.Max(1, retryDelayMinutes);
+        await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, httpClient);
 
         if (oneshot) break;
-
-        if (currentIntervalMinutes > 0)
-        {
-            Console.WriteLine($"Sleeping {currentIntervalMinutes}min before next check...");
-            await WaitForNextCheckAsync(TimeSpan.FromMinutes(currentIntervalMinutes), immediateFetchSignal);
-        }
 
         continue;
     }
@@ -144,8 +138,6 @@ while (true)
     }
 
     if (oneshot) break;
-    Console.WriteLine($"Sleeping {currentIntervalMinutes}min before next check...");
-    await WaitForNextCheckAsync(TimeSpan.FromMinutes(currentIntervalMinutes), immediateFetchSignal);
 }
 
 heartbeatCts.Cancel();
@@ -155,36 +147,19 @@ return 0;
 // ============================================================
 //  核心测速逻辑
 // ============================================================
-static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, ClientRuntimeProfile runtimeProfile,
-    HttpClient httpClient, int fallbackIntervalMinutes)
+static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRuntimeProfile runtimeProfile,
+    HttpClient httpClient)
 {
-    // 1. 获取任务：服务端真正到点才下发，不再提前拿任务本地等待
-    SpeedTestTask? task = null;
-    while (task is null)
+    var taskResp = await httpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
+    taskResp.EnsureSuccessStatusCode();
+    var taskBody = await taskResp.Content.ReadAsStringAsync();
+    var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
+    if (taskResult?.Success != true || taskResult.Data is null)
     {
-        var taskResp = await httpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
-        taskResp.EnsureSuccessStatusCode();
-        var taskBody = await taskResp.Content.ReadAsStringAsync();
-        var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
-
-        if (taskResult?.Success == true && taskResult.Data is not null)
-        {
-            task = taskResult.Data;
-            break;
-        }
-
-        var message = taskResult?.Message ?? "No task available";
-        Console.WriteLine($"No task available: {message}");
-
-        var match = Regex.Match(message, @"Retry after\s+(\d+)\s+seconds", RegexOptions.IgnoreCase);
-        if (match.Success && int.TryParse(match.Groups[1].Value, out var retrySeconds))
-        {
-            await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, retrySeconds)));
-            continue;
-        }
-
-        return fallbackIntervalMinutes;
+        throw new InvalidOperationException(taskResult?.Message ?? "No task available");
     }
+
+    var task = taskResult.Data;
 
     Console.WriteLine($"Got task {task.TaskId[..8]}: {task.IpAddresses.Count} IPs to test");
     Console.WriteLine($"Test URL template: {task.TestUrl}");
@@ -290,8 +265,6 @@ static async Task<int> RunTestCycleAsync(string serverUrl, string clientId, Clie
         new StringContent(reportJson, Encoding.UTF8, "application/json"));
     reportResp.EnsureSuccessStatusCode();
     Console.WriteLine("OK");
-
-    return Math.Max(1, task.ClientIntervalMinutes);
 }
 
 static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
@@ -613,16 +586,14 @@ static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile
     }
 }
 
-static async Task WaitForNextCheckAsync(TimeSpan delay, SemaphoreSlim immediateFetchSignal)
+static async Task WaitForFetchSignalAsync(SemaphoreSlim immediateFetchSignal)
 {
-    var delayTask = Task.Delay(delay);
-    var signalTask = immediateFetchSignal.WaitAsync();
-    var completed = await Task.WhenAny(delayTask, signalTask);
-
-    if (completed == signalTask)
+    await immediateFetchSignal.WaitAsync();
+    while (immediateFetchSignal.CurrentCount > 0)
     {
-        Console.WriteLine("Manual test trigger received. Fetching task immediately...");
+        await immediateFetchSignal.WaitAsync();
     }
+    Console.WriteLine("Server test trigger received. Fetching task immediately...");
 }
 
 // ============================================================

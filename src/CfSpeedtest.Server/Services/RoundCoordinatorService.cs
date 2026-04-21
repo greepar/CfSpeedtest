@@ -88,7 +88,7 @@ public class RoundCoordinatorService : BackgroundService
 
             foreach (var isp in isps)
             {
-                var startAtUtc = DateTime.UtcNow.AddSeconds(2);
+                var startAtUtc = nowUtc;
 
                 if (!Enum.TryParse<IspType>(isp, out var ispEnum))
                     continue;
@@ -129,7 +129,7 @@ public class RoundCoordinatorService : BackgroundService
         lock (_lock)
         {
             var ispKey = client.Isp.ToString();
-            var startAtUtc = nowUtc.AddSeconds(2);
+            var startAtUtc = nowUtc;
             var state = new RoundState
             {
                 Isp = client.Isp,
@@ -148,7 +148,8 @@ public class RoundCoordinatorService : BackgroundService
     {
         lock (_lock)
         {
-            if (_rounds.TryGetValue(isp.ToString(), out var state)
+            var state = EnsureActiveRoundStateLocked(isp, clientId, allowCreateForScheduledRound: true);
+            if (state is not null
                 && !state.Finalized
                 && state.PendingTriggerClients.Remove(clientId))
             {
@@ -217,6 +218,7 @@ public class RoundCoordinatorService : BackgroundService
         var config = _store.GetConfig();
         var nowUtc = DateTime.UtcNow;
         var nextRoundStartUtc = GetNextRoundStartUtc(nowUtc, config.ClientIntervalMinutes);
+        DateTime? currentRoundStartUtc = null;
         var statuses = new List<IspRoundStatus>();
 
         lock (_lock)
@@ -225,13 +227,21 @@ public class RoundCoordinatorService : BackgroundService
             {
                 if (_rounds.TryGetValue(ispKey, out var state))
                 {
+                    var totalTargetClients = state.AssignedClients.Count + state.PendingTriggerClients.Count;
+                    if (!state.Finalized && nowUtc <= state.FinalizeAfterUtc)
+                    {
+                        currentRoundStartUtc = currentRoundStartUtc.HasValue
+                            ? Min(currentRoundStartUtc.Value, state.StartAtUtc)
+                            : state.StartAtUtc;
+                    }
+
                     statuses.Add(new IspRoundStatus
                     {
                         Isp = ispKey,
                         TaskId = state.TaskId,
                         ScheduledAtUtc = state.StartAtUtc,
                         FinalizeAfterUtc = state.FinalizeAfterUtc,
-                        AssignedClients = state.AssignedClients.Count,
+                        AssignedClients = totalTargetClients,
                         ReportedClients = state.ReportedClients.Count,
                         Finalizing = state.Finalizing,
                         Finalized = state.Finalized,
@@ -250,18 +260,17 @@ public class RoundCoordinatorService : BackgroundService
                     });
                 }
             }
+        }
 
-            var nextManualStart = statuses
-                .Where(s => !s.Finalized && nowUtc <= s.FinalizeAfterUtc)
-                .Select(s => s.ScheduledAtUtc)
-                .DefaultIfEmpty(nextRoundStartUtc)
-                .Min();
-            nextRoundStartUtc = nextManualStart;
+        if (currentRoundStartUtc.HasValue)
+        {
+            nextRoundStartUtc = GetNextRoundStartUtc(currentRoundStartUtc.Value.AddSeconds(1), config.ClientIntervalMinutes);
         }
 
         return new RoundStatusOverview
         {
             ServerNowUtc = nowUtc,
+            CurrentRoundStartUtc = currentRoundStartUtc,
             NextRoundStartUtc = nextRoundStartUtc,
             ClientIntervalMinutes = config.ClientIntervalMinutes,
             Isps = statuses,
@@ -363,10 +372,56 @@ public class RoundCoordinatorService : BackgroundService
         return new DateTime(nextTicks, DateTimeKind.Utc);
     }
 
+    private static DateTime GetCurrentRoundStartUtc(DateTime nowUtc, int intervalMinutes)
+    {
+        var safeIntervalMinutes = Math.Max(1, intervalMinutes);
+        var intervalTicks = TimeSpan.FromMinutes(safeIntervalMinutes).Ticks;
+        var currentTicks = (nowUtc.Ticks / intervalTicks) * intervalTicks;
+        return new DateTime(currentTicks, DateTimeKind.Utc);
+    }
+
     private static TimeSpan GetFinalizeGracePeriod(ServerConfig config)
     {
         var perIpSeconds = Math.Max(1, config.TcpTestDurationSeconds) + Math.Max(1, config.DownloadDurationSeconds);
         var estimatedBatchSeconds = Math.Max(1, config.BatchSize) * perIpSeconds;
         return TimeSpan.FromSeconds(estimatedBatchSeconds + 60);
     }
+
+    private RoundState? EnsureActiveRoundStateLocked(IspType isp, string clientId, bool allowCreateForScheduledRound)
+    {
+        var config = _store.GetConfig();
+        var nowUtc = DateTime.UtcNow;
+        var ispKey = isp.ToString();
+
+        if (!_rounds.TryGetValue(ispKey, out var state) || state.Finalized || nowUtc > state.FinalizeAfterUtc)
+        {
+            if (!allowCreateForScheduledRound)
+                return null;
+
+            var currentStartUtc = GetCurrentRoundStartUtc(nowUtc, config.ClientIntervalMinutes);
+            state = new RoundState
+            {
+                Isp = isp,
+                IspKey = ispKey,
+                TaskId = $"{ispKey}-{currentStartUtc:yyyyMMddHHmmss}",
+                StartAtUtc = currentStartUtc,
+                FinalizeAfterUtc = currentStartUtc.Add(GetFinalizeGracePeriod(config)),
+            };
+            _rounds[ispKey] = state;
+        }
+
+        if (!state.Finalized
+            && nowUtc >= state.StartAtUtc
+            && nowUtc <= state.FinalizeAfterUtc
+            && !state.AssignedClients.Contains(clientId)
+            && !state.ReportedClients.Contains(clientId)
+            && !state.PendingTriggerClients.Contains(clientId))
+        {
+            state.PendingTriggerClients.Add(clientId);
+        }
+
+        return state;
+    }
+
+    private static DateTime Min(DateTime left, DateTime right) => left <= right ? left : right;
 }

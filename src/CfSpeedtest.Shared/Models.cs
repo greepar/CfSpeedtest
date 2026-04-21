@@ -584,6 +584,7 @@ public class IspRoundStatus
 public class RoundStatusOverview
 {
     public DateTime ServerNowUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? CurrentRoundStartUtc { get; set; }
     public DateTime NextRoundStartUtc { get; set; }
     public int ClientIntervalMinutes { get; set; } = 60;
     public List<IspRoundStatus> Isps { get; set; } = [];
