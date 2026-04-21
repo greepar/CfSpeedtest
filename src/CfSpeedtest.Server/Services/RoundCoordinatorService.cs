@@ -28,6 +28,7 @@ public class RoundCoordinatorService : BackgroundService
     private readonly ILogger<RoundCoordinatorService> _logger;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, RoundState> _rounds = new();
+    private readonly Dictionary<string, DateTime> _latestFinalizedStartAtUtc = new();
     private readonly HashSet<string> _manualUpdateClients = [];
 
     public RoundCoordinatorService(
@@ -52,6 +53,11 @@ public class RoundCoordinatorService : BackgroundService
             var startAtUtc = _rounds.TryGetValue(ispKey, out var existingState) && !existingState.Finalized && DateTime.UtcNow <= existingState.FinalizeAfterUtc
                 ? existingState.StartAtUtc
                 : GetNextRoundStartUtc(DateTime.UtcNow, config.ClientIntervalMinutes);
+
+            if (_latestFinalizedStartAtUtc.TryGetValue(ispKey, out var latestFinalizedAt) && latestFinalizedAt >= startAtUtc)
+            {
+                startAtUtc = GetNextRoundStartUtc(latestFinalizedAt.AddSeconds(1), config.ClientIntervalMinutes);
+            }
 
             if (!_rounds.TryGetValue(ispKey, out var state) || state.StartAtUtc != startAtUtc)
             {
@@ -130,6 +136,10 @@ public class RoundCoordinatorService : BackgroundService
         {
             var ispKey = client.Isp.ToString();
             var startAtUtc = nowUtc;
+            if (_latestFinalizedStartAtUtc.TryGetValue(ispKey, out var latestFinalizedAt) && latestFinalizedAt >= startAtUtc)
+            {
+                return false;
+            }
             var state = new RoundState
             {
                 Isp = client.Isp,
@@ -321,6 +331,22 @@ public class RoundCoordinatorService : BackgroundService
             .Where(h => h.Isp == state.Isp && h.TaskId == state.TaskId)
             .ToList();
 
+        if (state.AssignedClients.Count == 0 && state.PendingTriggerClients.Count == 0 && roundReports.Count == 0)
+        {
+            lock (_lock)
+            {
+                state.Finalized = true;
+                _latestFinalizedStartAtUtc[state.IspKey] = state.StartAtUtc;
+            }
+
+            _logger.LogInformation(
+                "Skipping empty round finalization for {Isp}: task={TaskId}",
+                state.IspKey,
+                state.TaskId);
+
+            return "empty round skipped";
+        }
+
         var topResults = roundReports
             .SelectMany(h => h.Results)
             .OrderByDescending(r => r.Score)
@@ -350,6 +376,7 @@ public class RoundCoordinatorService : BackgroundService
         lock (_lock)
         {
             state.Finalized = true;
+            _latestFinalizedStartAtUtc[state.IspKey] = state.StartAtUtc;
         }
 
         _logger.LogInformation(
@@ -399,6 +426,10 @@ public class RoundCoordinatorService : BackgroundService
                 return null;
 
             var currentStartUtc = GetCurrentRoundStartUtc(nowUtc, config.ClientIntervalMinutes);
+            if (_latestFinalizedStartAtUtc.TryGetValue(ispKey, out var latestFinalizedAt) && latestFinalizedAt >= currentStartUtc)
+            {
+                return null;
+            }
             state = new RoundState
             {
                 Isp = isp,

@@ -361,6 +361,12 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
                         这里是纯手动启动模式。选择运营商、名称和服务端地址后，点击“生成并加入允许列表”，下方会显示生成出来的 clientId 和手动启动命令。
                     </div>
+                    <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text2); cursor:pointer;">
+                            <input id="reserve-client-disable-auto-update" type="checkbox" style="width:auto;" />
+                            手动模式启动时禁用自动更新（追加 <span style="font-family:monospace;">--disable-auto-update</span>）
+                        </label>
+                    </div>
                     <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制手动启动命令</button>
                     <div id="reserved-client-command" data-command="" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
                 </div>
@@ -1225,21 +1231,21 @@ function buildInstallOneLiner(url, params) {
 
     if (currentInstallScriptPlatform === 'windows') {
         var psArgs = [];
-        psArgs.push('-ServerUrl "' + psEscape(params.serverUrl) + '"');
-        psArgs.push('-ClientId "' + psEscape(params.clientId) + '"');
-        psArgs.push('-Isp "' + psEscape(params.isp) + '"');
-        psArgs.push('-ClientName "' + psEscape(params.name) + '"');
-        psArgs.push('-Repository "' + psEscape((serverConfigData.clientUpdateRepository || '').trim()) + '"');
-        psArgs.push('-ReleaseTag "' + psEscape((serverConfigData.clientUpdateReleaseTag || '').trim()) + '"');
+        psArgs.push('-ServerUrl ' + psSingleQuote(params.serverUrl));
+        psArgs.push('-ClientId ' + psSingleQuote(params.clientId));
+        psArgs.push('-Isp ' + psSingleQuote(params.isp));
+        psArgs.push('-ClientName ' + psSingleQuote(params.name));
+        psArgs.push('-Repository ' + psSingleQuote((serverConfigData.clientUpdateRepository || '').trim()));
+        psArgs.push('-ReleaseTag ' + psSingleQuote((serverConfigData.clientUpdateReleaseTag || '').trim()));
         if ((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
-            psArgs.push('-GhProxyPrefix "' + psEscape((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) + '"');
+            psArgs.push('-GhProxyPrefix ' + psSingleQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
         }
 
-        return 'powershell -ExecutionPolicy Bypass -Command "$tmp=Join-Path $env:TEMP \'install-cfspeedtest-client.ps1\'; irm \'' +
-            url.replace(/'/g, "''") +
-            '\' -OutFile $tmp; & powershell -ExecutionPolicy Bypass -File $tmp ' +
-            psArgs.join(' ') +
-            '"';
+        return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "& { ' +
+            '$tmp = Join-Path $env:TEMP ' + psSingleQuote('install-cfspeedtest-client.ps1') + '; ' +
+            'irm ' + psSingleQuote(url) + ' -OutFile $tmp; ' +
+            '& powershell -ExecutionPolicy Bypass -File $tmp ' + psArgs.join(' ') +
+            ' }"';
     }
 
     var suffix = [];
@@ -1260,8 +1266,8 @@ function shellQuote(value) {
     return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
 }
 
-function psEscape(value) {
-    return String(value || '').replace(/"/g, '""');
+function psSingleQuote(value) {
+    return "'" + String(value || '').replace(/'/g, "''") + "'";
 }
 
 function refreshInstallScript() {
@@ -1316,11 +1322,12 @@ function reserveClientId() {
         }
 
         var clientId = r.data.clientId;
+        var disableAutoUpdate = document.getElementById('reserve-client-disable-auto-update').checked;
         var command = 'CfSpeedtest.Client.exe --server ' + server +
             ' --client-id ' + clientId +
             ' --isp ' + isp +
             (name ? ' --name ' + name : '') +
-            ' --disable-auto-update';
+            (disableAutoUpdate ? ' --disable-auto-update' : '');
         document.getElementById('reserved-client-id').value = clientId;
         var commandEl = document.getElementById('reserved-client-command');
         commandEl.dataset.command = command;
