@@ -23,7 +23,7 @@ var explicitClientId = GetArg(args, "client-id", "");
 var ispStr = GetArg(args, "isp", "Telecom");
 var clientName = GetArg(args, "name", Environment.MachineName);
 var intervalStr = GetArg(args, "interval", "60"); // 默认60分钟
-var autoUpdate = HasFlag(args, "auto-update");
+var autoUpdate = !HasFlag(args, "disable-auto-update");
 var oneshot = HasFlag(args, "once");
 var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
 var clientPlatform = DetectClientPlatform();
@@ -296,7 +296,7 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         Console.WriteLine($"New client version available for {info.Platform}: {info.LatestVersion} ({info.DownloadUrl})");
         if (!autoUpdate)
         {
-            Console.WriteLine("Auto-update disabled. Start client with --auto-update to update automatically.");
+            Console.WriteLine("Auto-update disabled. Start client without --disable-auto-update to update automatically.");
             return;
         }
 
