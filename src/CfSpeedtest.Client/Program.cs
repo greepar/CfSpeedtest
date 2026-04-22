@@ -479,23 +479,34 @@ static Task StartHeartbeatLoopAsync(
         var intervalSeconds = Math.Max(5, heartbeatIntervalSeconds);
         var wsEverConnected = false;
         var wsConsecutiveFailures = 0;
+        DateTime? wsFallbackUntilUtc = null;
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var wsResult = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
-            if (wsResult == 1)
-            {
-                wsEverConnected = true;
-                wsConsecutiveFailures = 0;
-                continue;
-            }
+            var nowUtc = DateTime.UtcNow;
+            var inFallbackWindow = wsFallbackUntilUtc.HasValue && nowUtc < wsFallbackUntilUtc.Value;
 
-            wsConsecutiveFailures++;
-            var shouldFallbackHttp = wsEverConnected || wsConsecutiveFailures >= 3;
-            if (!shouldFallbackHttp)
+            if (!inFallbackWindow)
             {
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
-                continue;
+                var wsResult = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
+                if (wsResult == 1)
+                {
+                    wsEverConnected = true;
+                    wsConsecutiveFailures = 0;
+                    wsFallbackUntilUtc = null;
+                    continue;
+                }
+
+                wsConsecutiveFailures++;
+                var shouldFallbackHttp = wsEverConnected || wsConsecutiveFailures >= 3;
+                if (!shouldFallbackHttp)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                    continue;
+                }
+
+                wsFallbackUntilUtc = DateTime.UtcNow.AddSeconds(60);
+                Console.WriteLine("WebSocket failed repeatedly. Entering HTTP heartbeat fallback for 60 seconds.");
             }
 
             try
@@ -574,6 +585,7 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
     try
     {
         using var ws = new ClientWebSocket();
+        ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
         var wsUrl = BuildWebSocketUrl(serverUrl, clientId, runtimeProfile.Isp);
         await ws.ConnectAsync(new Uri(wsUrl), cancellationToken);
         Console.WriteLine("WebSocket heartbeat connected.");
@@ -633,9 +645,9 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
         Console.WriteLine("WebSocket heartbeat disconnected.");
         return 1;
     }
-    catch
+    catch (Exception ex)
     {
-        Console.WriteLine("WebSocket heartbeat unavailable.");
+        Console.WriteLine($"WebSocket heartbeat unavailable: {ex.Message}");
         return 0;
     }
 }

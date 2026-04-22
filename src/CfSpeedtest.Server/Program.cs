@@ -69,7 +69,10 @@ app.Use(async (context, next) =>
     await context.Response.WriteAsJsonAsync(ApiResponse<string>.Fail("Unauthorized"), AppJsonContext.Default.ApiResponseString);
 });
 
-app.UseWebSockets();
+app.UseWebSockets(new WebSocketOptions
+{
+    KeepAliveInterval = TimeSpan.FromSeconds(15)
+});
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseStaticFiles(new StaticFileOptions
