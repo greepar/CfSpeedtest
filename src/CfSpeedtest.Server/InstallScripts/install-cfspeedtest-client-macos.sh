@@ -30,7 +30,7 @@ if [[ -z "$SERVER_URL" || -z "$CLIENT_ID" || -z "$REPOSITORY" || -z "$RELEASE_TA
 fi
 
 if [ "${EUID}" -ne 0 ]; then
-  fail "请使用 sudo / root 运行此脚本"
+  fail "请使用 sudo 执行此脚本，例如：curl -fsSL <script-url> | sudo bash -s -- ..."
 fi
 
 if [[ -z "$CLIENT_NAME" ]]; then

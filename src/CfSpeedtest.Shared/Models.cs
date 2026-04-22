@@ -138,6 +138,8 @@ public class ClientRegisterResponse
     public int HeartbeatIntervalSeconds { get; set; } = 5;
     public IspType EffectiveIsp { get; set; }
     public string EffectiveName { get; set; } = string.Empty;
+    public string EffectiveProxyMode { get; set; } = "direct";
+    public string EffectiveProxyUrl { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -150,6 +152,11 @@ public class ClientHeartbeatRequest
     public string? Name { get; set; }
     public string? Version { get; set; }
     public string? Platform { get; set; }
+    public string? RuntimeStatus { get; set; }
+    public int CurrentTaskTotalIps { get; set; }
+    public int CurrentTaskTestedIps { get; set; }
+    public DateTime? CurrentTaskStartedAt { get; set; }
+    public string? RuntimeLog { get; set; }
 }
 
 /// <summary>
@@ -164,6 +171,8 @@ public class ClientHeartbeatResponse
     public bool ForceCheckUpdate { get; set; }
     public IspType EffectiveIsp { get; set; }
     public string EffectiveName { get; set; } = string.Empty;
+    public string EffectiveProxyMode { get; set; } = "direct";
+    public string EffectiveProxyUrl { get; set; } = string.Empty;
 }
 
 public class ClientWsMessage
@@ -174,12 +183,19 @@ public class ClientWsMessage
     public string? Name { get; set; }
     public string? Version { get; set; }
     public string? Platform { get; set; }
+    public string? RuntimeStatus { get; set; }
+    public int CurrentTaskTotalIps { get; set; }
+    public int CurrentTaskTestedIps { get; set; }
+    public DateTime? CurrentTaskStartedAt { get; set; }
+    public string? RuntimeLog { get; set; }
     public int HeartbeatIntervalSeconds { get; set; }
     public bool ForceFetchTask { get; set; }
     public bool ForceCheckUpdate { get; set; }
     public string? Message { get; set; }
     public IspType EffectiveIsp { get; set; }
     public string? EffectiveName { get; set; }
+    public string EffectiveProxyMode { get; set; } = "direct";
+    public string EffectiveProxyUrl { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -256,6 +272,28 @@ public class WebUiAuthConfig
     public string Username { get; set; } = "admin";
     public string PasswordHash { get; set; } = string.Empty;
     public string PasswordSalt { get; set; } = string.Empty;
+    public List<WebUiSessionInfo> Sessions { get; set; } = [];
+}
+
+public class WebUiSessionInfo
+{
+    public string Token { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
+    public string UserAgent { get; set; } = string.Empty;
+    public string IpAddress { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAtUtc { get; set; }
+    public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public class WebUiSessionOverview
+{
+    public string Username { get; set; } = string.Empty;
+    public string UserAgent { get; set; } = string.Empty;
+    public string IpAddress { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAtUtc { get; set; }
+    public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 public class WebUiLoginRequest
@@ -314,6 +352,11 @@ public class ClientInfo
     public string? Name { get; set; }
     public string? Version { get; set; }
     public string? Platform { get; set; }
+    public string? RuntimeStatus { get; set; }
+    public int CurrentTaskTotalIps { get; set; }
+    public int CurrentTaskTestedIps { get; set; }
+    public DateTime? CurrentTaskStartedAt { get; set; }
+    public string? RuntimeLog { get; set; }
     public DateTime RegisteredAt { get; set; } = DateTime.UtcNow;
     public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
     public bool IsOnline { get; set; }
@@ -419,8 +462,17 @@ public class ServerConfig
     /// <summary>客户端轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;
 
+    /// <summary>测速记录保留天数，0 表示不自动清理</summary>
+    public int HistoryRetentionDays { get; set; } = 30;
+
     /// <summary>客户端心跳间隔(秒)</summary>
     public int HeartbeatIntervalSeconds { get; set; } = 5;
+
+    /// <summary>客户端代理模式：direct / system / custom</summary>
+    public string ClientProxyMode { get; set; } = "direct";
+
+    /// <summary>客户端自定义代理地址，仅在 custom 模式生效</summary>
+    public string ClientProxyUrl { get; set; } = string.Empty;
 
     /// <summary>最低下载速度阈值(KB/s)，低于该值的结果不会进入最终TopN</summary>
     public double MinDownloadSpeedKBps { get; set; }
@@ -519,12 +571,6 @@ public class HuaweiDnsConfig
 
     /// <summary>华为云 Secret Key（SK）</summary>
     public string SecretKey { get; set; } = string.Empty;
-
-    /// <summary>华为云项目ID</summary>
-    public string ProjectId { get; set; } = string.Empty;
-
-    /// <summary>华为云账号ID，可选，用于 X-Domain-Id</summary>
-    public string DomainId { get; set; } = string.Empty;
 
     /// <summary>华为云 DNS API Endpoint（如 https://dns.cn-north-4.myhuaweicloud.com）</summary>
     public string Endpoint { get; set; } = "https://dns.cn-north-4.myhuaweicloud.com";

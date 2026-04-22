@@ -43,7 +43,7 @@ public class RoundCoordinatorService : BackgroundService
         _logger = logger;
     }
 
-    public (string TaskId, DateTime ScheduledAtUtc) RegisterClient(IspType isp, string clientId)
+    public (string TaskId, DateTime ScheduledAtUtc, bool IsImmediateDispatch) RegisterClient(IspType isp, string clientId)
     {
         var config = _store.GetConfig();
         var ispKey = isp.ToString();
@@ -73,8 +73,19 @@ public class RoundCoordinatorService : BackgroundService
             }
 
             state.AssignedClients.Add(clientId);
-            state.PendingTriggerClients.Remove(clientId);
-            return (state.TaskId, state.StartAtUtc);
+            var isImmediateDispatch = state.PendingTriggerClients.Contains(clientId);
+            return (state.TaskId, state.StartAtUtc, isImmediateDispatch);
+        }
+    }
+
+    public void MarkTriggerTaskDispatched(string clientId, IspType isp)
+    {
+        lock (_lock)
+        {
+            if (_rounds.TryGetValue(isp.ToString(), out var state))
+            {
+                state.PendingTriggerClients.Remove(clientId);
+            }
         }
     }
 
@@ -347,13 +358,21 @@ public class RoundCoordinatorService : BackgroundService
             return "empty round skipped";
         }
 
-        var topResults = roundReports
+        var allRoundResults = roundReports
             .SelectMany(h => h.Results)
             .OrderByDescending(r => r.Score)
             .GroupBy(r => r.IpAddress)
             .Select(g => g.First())
+            .ToList();
+
+        var qualifiedResults = allRoundResults
+            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
             .Take(config.TopN)
             .ToList();
+
+        var topResults = qualifiedResults.Count > 0
+            ? qualifiedResults
+            : allRoundResults.Take(1).ToList();
 
         int removed = 0;
         if (config.AutoCleanupEnabled && topResults.Count > 0)

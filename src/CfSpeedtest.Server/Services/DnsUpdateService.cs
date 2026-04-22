@@ -8,9 +8,8 @@ namespace CfSpeedtest.Server.Services;
 /// <summary>
 /// DNS更新服务 - 支持华为云 DNS API
 /// 根据测速结果自动更新各运营商对应域名的A记录
-/// 同时作为后台定时服务运行
 /// </summary>
-public class DnsUpdateService : IHostedService, IDisposable
+public class DnsUpdateService
 {
     private readonly ILogger<DnsUpdateService> _logger;
     private readonly DataStore _store;
@@ -19,98 +18,11 @@ public class DnsUpdateService : IHostedService, IDisposable
     // 各运营商最后一次更新状态
     private readonly Dictionary<string, DnsUpdateStatus> _lastStatus = new();
 
-    // 后台定时器
-    private Timer? _timer;
-    private int _running; // 0=idle, 1=running (防止重入)
-
     public DnsUpdateService(ILogger<DnsUpdateService> logger, DataStore store, IHttpClientFactory httpFactory)
     {
         _logger = logger;
         _store = store;
         _httpFactory = httpFactory;
-    }
-
-    // ==================== IHostedService ====================
-
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("DnsUpdateService background service starting");
-        // 启动时延迟 30 秒再执行第一次，给系统时间初始化
-        _timer = new Timer(OnTimerTick, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
-        return Task.CompletedTask;
-    }
-
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("DnsUpdateService background service stopping");
-        _timer?.Change(Timeout.Infinite, 0);
-        return Task.CompletedTask;
-    }
-
-    public void Dispose()
-    {
-        _timer?.Dispose();
-    }
-
-    /// <summary>
-    /// 定时器回调 - 每 30 秒检查一次是否到了该更新的时间
-    /// 实际更新间隔由配置 UpdateIntervalMinutes 控制
-    /// </summary>
-    private async void OnTimerTick(object? state)
-    {
-        // 防止重入
-        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
-            return;
-
-        try
-        {
-            var config = _store.GetConfig();
-            var hwConfig = config.HuaweiDns;
-
-            if (!hwConfig.Enabled || hwConfig.UpdateIntervalMinutes <= 0)
-                return;
-
-            var interval = TimeSpan.FromMinutes(hwConfig.UpdateIntervalMinutes);
-
-            foreach (var ispKey in new[] { "Telecom", "Unicom", "Mobile" })
-            {
-                // 检查该运营商是否配置了记录集
-                if (!hwConfig.Records.TryGetValue(ispKey, out var rec)
-                    || string.IsNullOrEmpty(rec.ZoneId)
-                    || string.IsNullOrEmpty(rec.RecordSetId))
-                    continue;
-
-                // 检查是否到了更新时间
-                if (_lastStatus.TryGetValue(ispKey, out var lastStatus)
-                    && lastStatus.LastUpdatedAt.HasValue
-                    && DateTime.UtcNow - lastStatus.LastUpdatedAt.Value < interval)
-                    continue;
-
-                // 到时间了，执行更新
-                if (!Enum.TryParse<IspType>(ispKey, out var ispEnum))
-                    continue;
-
-                _logger.LogInformation("Auto DNS update triggered for {Isp} (interval: {Interval} min)",
-                    ispKey, hwConfig.UpdateIntervalMinutes);
-
-                var aggregatedResults = AggregateLatestResultsForIsp(ispEnum, config.TopN);
-                if (aggregatedResults.Count == 0)
-                {
-                    _logger.LogDebug("No IPs available for auto DNS update of {Isp}, skipping", ispKey);
-                    continue;
-                }
-
-                await UpdateRecordSetForIspAsync(ispKey, aggregatedResults, hwConfig);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error in DNS auto-update timer");
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _running, 0);
-        }
     }
 
     // ==================== Public API ====================
@@ -174,9 +86,9 @@ public class DnsUpdateService : IHostedService, IDisposable
                     var next = s.LastUpdatedAt.Value.AddMinutes(hwConfig.UpdateIntervalMinutes);
                     var remaining = next - DateTime.UtcNow;
                     if (remaining.TotalSeconds > 0)
-                        s.Message = (s.Message ?? "") + $" | 下次自动更新: {remaining.TotalMinutes:F0} 分钟后";
+                        s.Message = (s.Message ?? "") + $" | 下次满足轮次自动更新窗口: {remaining.TotalMinutes:F0} 分钟后";
                     else
-                        s.Message = (s.Message ?? "") + " | 即将自动更新";
+                        s.Message = (s.Message ?? "") + " | 已到自动更新窗口，等待下一轮收口";
                 }
             }
         }
@@ -212,17 +124,23 @@ public class DnsUpdateService : IHostedService, IDisposable
             return;
         }
 
-        // 如果配置了定时更新，则不在报告时立即触发（交给定时器）
         if (hwConfig.UpdateIntervalMinutes > 0)
         {
+            if (_lastStatus.TryGetValue(ispKey, out var lastStatus)
+                && lastStatus.LastUpdatedAt.HasValue
+                && DateTime.UtcNow - lastStatus.LastUpdatedAt.Value < TimeSpan.FromMinutes(hwConfig.UpdateIntervalMinutes))
+            {
+                var remaining = lastStatus.LastUpdatedAt.Value.AddMinutes(hwConfig.UpdateIntervalMinutes) - DateTime.UtcNow;
+                UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
+                    $"已汇总本次 TopN，等待按轮次自动更新（剩余约 {Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟）");
+                _logger.LogDebug("DNS interval not reached yet for {Isp}, skipping round-triggered update", isp);
+                return;
+            }
+
             UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
-                $"已汇总本次 TopN，等待定时更新（{hwConfig.UpdateIntervalMinutes} 分钟间隔）");
-            _logger.LogDebug("DNS auto-update interval is set ({Interval} min), skipping immediate update for {Isp}",
-                hwConfig.UpdateIntervalMinutes, isp);
-            return;
+                $"已汇总本次 TopN，本轮收口触发自动更新（{hwConfig.UpdateIntervalMinutes} 分钟间隔）");
         }
 
-        // UpdateIntervalMinutes == 0 表示每次报告都立即更新
         if (aggregatedResults.Count == 0)
         {
             UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false, "没有可用的测速结果");
@@ -546,18 +464,6 @@ public class DnsUpdateService : IHostedService, IDisposable
             {
                 CharSet = "utf-8"
             };
-        }
-
-        if (!string.IsNullOrWhiteSpace(hwConfig.ProjectId))
-        {
-            headers["x-project-id"] = hwConfig.ProjectId.Trim();
-            request.Headers.TryAddWithoutValidation("X-Project-Id", hwConfig.ProjectId.Trim());
-        }
-
-        if (!string.IsNullOrWhiteSpace(hwConfig.DomainId))
-        {
-            headers["x-domain-id"] = hwConfig.DomainId.Trim();
-            request.Headers.TryAddWithoutValidation("X-Domain-Id", hwConfig.DomainId.Trim());
         }
 
         request.Headers.Host = uri.Authority;

@@ -40,6 +40,10 @@ if (!Enum.TryParse<IspType>(ispStr, true, out var configuredIsp))
 }
 
 var runtimeProfile = new ClientRuntimeProfile(configuredIsp, configuredClientName);
+var runtimeState = new ClientRuntimeState();
+var proxySettings = new ClientProxySettings();
+using var transportState = new ClientTransportState(proxySettings);
+runtimeState.AppendLog("Client process starting");
 
 var intervalMinutes = int.Parse(intervalStr);
 Console.WriteLine($"Server:   {serverUrl}");
@@ -49,8 +53,8 @@ Console.WriteLine($"Version:  {currentVersion}");
 Console.WriteLine($"Platform: {clientPlatform}");
 Console.WriteLine($"Default interval: {intervalMinutes}min");
 Console.WriteLine();
+runtimeState.AppendLog($"Server={serverUrl}, ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}, Version={currentVersion}, Platform={clientPlatform}");
 
-using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 var stateFile = Path.Combine(AppContext.BaseDirectory, "client-state.json");
 var localState = LoadClientState(stateFile);
 if (!string.IsNullOrWhiteSpace(explicitClientId))
@@ -62,7 +66,8 @@ if (!string.IsNullOrWhiteSpace(localState.ClientId))
     Console.WriteLine($"Local clientId: {localState.ClientId}");
 }
 
-await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, httpClient);
+const int StartupRetryDelaySeconds = 5;
+await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
 
 // NativeAOT-safe JSON options using source generators
 var jsonOpts = new JsonSerializerOptions
@@ -73,60 +78,73 @@ var jsonOpts = new JsonSerializerOptions
 
 // ===== 注册客户端 =====
 Console.WriteLine("[1] Registering with server...");
+runtimeState.AppendLog("Registering with server");
 string clientId;
 int heartbeatIntervalSeconds = 30;
-try
+while (true)
 {
-    var regReq = new ClientRegisterRequest
+    try
     {
-        ClientId = localState.ClientId,
-        Isp = runtimeProfile.Isp,
-        Name = runtimeProfile.Name,
-        Version = currentVersion,
-        Platform = clientPlatform,
-    };
-    var regJson = JsonSerializer.Serialize(regReq, AppJsonContext.Default.ClientRegisterRequest);
-    var regResp = await httpClient.PostAsync(
-        $"{serverUrl}/api/client/register",
-        new StringContent(regJson, Encoding.UTF8, "application/json"));
-    regResp.EnsureSuccessStatusCode();
-    var regBody = await regResp.Content.ReadAsStringAsync();
-    var regResult = JsonSerializer.Deserialize(regBody, AppJsonContext.Default.ApiResponseClientRegisterResponse);
-    if (regResult?.Success != true || regResult.Data is null)
-    {
-        Console.WriteLine($"Registration failed: {regResult?.Message}");
-        return 1;
+        var regReq = new ClientRegisterRequest
+        {
+            ClientId = localState.ClientId,
+            Isp = runtimeProfile.Isp,
+            Name = runtimeProfile.Name,
+            Version = currentVersion,
+            Platform = clientPlatform,
+        };
+        var regJson = JsonSerializer.Serialize(regReq, AppJsonContext.Default.ClientRegisterRequest);
+        var regResp = await transportState.HttpClient.PostAsync(
+            $"{serverUrl}/api/client/register",
+            new StringContent(regJson, Encoding.UTF8, "application/json"));
+        regResp.EnsureSuccessStatusCode();
+        var regBody = await regResp.Content.ReadAsStringAsync();
+        var regResult = JsonSerializer.Deserialize(regBody, AppJsonContext.Default.ApiResponseClientRegisterResponse);
+        if (regResult?.Success != true || regResult.Data is null)
+        {
+            Console.WriteLine($"Registration failed: {regResult?.Message}");
+            runtimeState.AppendLog($"Registration failed: {regResult?.Message}");
+            await Task.Delay(TimeSpan.FromSeconds(StartupRetryDelaySeconds));
+            continue;
+        }
+
+        clientId = regResult.Data.ClientId;
+        heartbeatIntervalSeconds = regResult.Data.HeartbeatIntervalSeconds > 0
+            ? regResult.Data.HeartbeatIntervalSeconds
+            : heartbeatIntervalSeconds;
+        ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName, regResult.Data.EffectiveProxyMode, regResult.Data.EffectiveProxyUrl);
+        localState.ClientId = clientId;
+        SaveClientState(stateFile, localState);
+        Console.WriteLine($"Registered as: {clientId}");
+        runtimeState.AppendLog($"Registered as {clientId}");
+        break;
     }
-    clientId = regResult.Data.ClientId;
-    heartbeatIntervalSeconds = regResult.Data.HeartbeatIntervalSeconds > 0
-        ? regResult.Data.HeartbeatIntervalSeconds
-        : heartbeatIntervalSeconds;
-    ApplyAuthoritativeClientMetadata(runtimeProfile, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName);
-    localState.ClientId = clientId;
-    SaveClientState(stateFile, localState);
-    Console.WriteLine($"Registered as: {clientId}");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"Failed to register: {ex.Message}");
-    return 1;
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Failed to register: {ex.Message}");
+        runtimeState.AppendLog($"Failed to register: {ex.Message}");
+        Console.WriteLine($"Retrying in {StartupRetryDelaySeconds}s...");
+        await Task.Delay(TimeSpan.FromSeconds(StartupRetryDelaySeconds));
+    }
 }
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, httpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, transportState.HttpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
 {
     Console.WriteLine();
     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Waiting for server trigger...");
+    runtimeState.SetWaiting();
     await WaitForFetchSignalAsync(immediateFetchSignal);
     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Fetching task...");
+    runtimeState.AppendLog("Server trigger received. Fetching task");
 
     try
     {
-        await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, httpClient);
+        await RunTestCycleAsync(serverUrl, clientId, runtimeProfile, runtimeState, transportState, immediateFetchSignal);
 
         if (oneshot) break;
 
@@ -148,20 +166,36 @@ return 0;
 //  核心测速逻辑
 // ============================================================
 static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRuntimeProfile runtimeProfile,
-    HttpClient httpClient)
+    ClientRuntimeState runtimeState, ClientTransportState transportState, SemaphoreSlim immediateFetchSignal)
 {
-    var taskResp = await httpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
-    taskResp.EnsureSuccessStatusCode();
-    var taskBody = await taskResp.Content.ReadAsStringAsync();
-    var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
-    if (taskResult?.Success != true || taskResult.Data is null)
+    SpeedTestTask? task = null;
+    while (task is null)
     {
-        throw new InvalidOperationException(taskResult?.Message ?? "No task available");
+        var taskResp = await transportState.HttpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
+        taskResp.EnsureSuccessStatusCode();
+        var taskBody = await taskResp.Content.ReadAsStringAsync();
+        var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
+        if (taskResult?.Success == true && taskResult.Data is not null)
+        {
+            task = taskResult.Data;
+            break;
+        }
+
+        var message = taskResult?.Message ?? "No task available";
+        Console.WriteLine($"No task available: {message}");
+        runtimeState.AppendLog($"No task available: {message}");
+        var retryMatch = Regex.Match(message, @"Retry after\s+(\d+)\s+seconds", RegexOptions.IgnoreCase);
+        if (retryMatch.Success && int.TryParse(retryMatch.Groups[1].Value, out var retrySeconds))
+        {
+            await WaitForRetryOrFetchSignalAsync(TimeSpan.FromSeconds(Math.Max(1, retrySeconds)), immediateFetchSignal);
+            continue;
+        }
+
+        throw new InvalidOperationException(message);
     }
 
-    var task = taskResult.Data;
-
     Console.WriteLine($"Got task {task.TaskId[..8]}: {task.IpAddresses.Count} IPs to test");
+    runtimeState.AppendLog($"Got task {task.TaskId}: {task.IpAddresses.Count} IPs");
     Console.WriteLine($"Test URL template: {task.TestUrl}");
     Console.WriteLine($"Host: {task.TestHost}, Port: {task.TestPort}");
     Console.WriteLine($"Server interval: {task.ClientIntervalMinutes}min");
@@ -170,6 +204,7 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     var allResults = new List<IpTestResult>();
     var testedIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var pendingIps = new Queue<string>(task.IpAddresses);
+    runtimeState.SetTesting(task.IpAddresses.Count, 0);
 
     while (pendingIps.Count > 0)
     {
@@ -177,7 +212,10 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         if (!testedIps.Add(ip))
             continue;
 
+        runtimeState.SetTesting(task.IpAddresses.Count, testedIps.Count - 1);
+
         Console.Write($"  [{testedIps.Count}] {ip,-16} ");
+        runtimeState.AppendLog($"[{testedIps.Count}] Testing {ip}");
 
         var result = new IpTestResult { IpAddress = ip };
 
@@ -189,13 +227,14 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         if (result.PacketLossRate > 0.5)
         {
             Console.WriteLine("SKIP (high loss)");
+            runtimeState.AppendLog($"{ip} skipped due to high loss");
             result.Score = 0;
             allResults.Add(result);
             continue;
         }
 
         // 2b. 下载速度测试
-        await TestDownloadAsync(result, ip, task.TestUrl, task.TestHost, task.TestPort, task.DownloadDurationSeconds, task.MaxDownloadSpeedKBps);
+        await TestDownloadAsync(result, ip, task.TestUrl, task.TestHost, task.TestPort, task.DownloadDurationSeconds, task.MaxDownloadSpeedKBps, transportState.ProxySettings);
         Console.Write($"DL: {result.DownloadSpeedKBps,8:F1} KB/s | ");
 
         // 2c. 综合评分: 速度权重60%, 延迟权重25%, 丢包权重15%
@@ -205,7 +244,9 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         result.Score = speedScore * 0.60 + latencyScore * 0.25 + lossScore * 0.15;
 
         Console.WriteLine($"Score: {result.Score:F1}");
+        runtimeState.AppendLog($"{ip} TCP={result.AvgLatencyMs:F1}ms loss={result.PacketLossRate:P1} DL={result.DownloadSpeedKBps:F1}KB/s Score={result.Score:F1}");
         allResults.Add(result);
+        runtimeState.SetTesting(task.IpAddresses.Count, testedIps.Count);
 
         var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
         if (qualifiedCount >= task.TopN)
@@ -213,7 +254,8 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
 
         if (pendingIps.Count == 0)
         {
-            var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, httpClient);
+            var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, transportState.HttpClient);
+            runtimeState.AppendLog($"Requested additional IP batch, received {additionalIps.Count} IP(s)");
             foreach (var extraIp in additionalIps)
             {
                 if (!testedIps.Contains(extraIp))
@@ -251,6 +293,7 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     // 4. 上报结果
     Console.WriteLine();
     Console.Write("Reporting results... ");
+    runtimeState.AppendLog($"Reporting {topResults.Count} result(s)");
     var report = new SpeedTestReport
     {
         TaskId = task.TaskId,
@@ -260,11 +303,13 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         CompletedAt = DateTime.UtcNow,
     };
     var reportJson = JsonSerializer.Serialize(report, AppJsonContext.Default.SpeedTestReport);
-    var reportResp = await httpClient.PostAsync(
+    var reportResp = await transportState.HttpClient.PostAsync(
         $"{serverUrl}/api/report",
         new StringContent(reportJson, Encoding.UTF8, "application/json"));
     reportResp.EnsureSuccessStatusCode();
     Console.WriteLine("OK");
+    runtimeState.SetCompleted(task.IpAddresses.Count, topResults.Count);
+    runtimeState.AppendLog("Report completed successfully");
 }
 
 static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
@@ -418,6 +463,9 @@ static Task StartHeartbeatLoopAsync(
     string serverUrl,
     string clientId,
     ClientRuntimeProfile runtimeProfile,
+    ClientRuntimeState runtimeState,
+    ClientProxySettings proxySettings,
+    ClientTransportState transportState,
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
@@ -428,15 +476,28 @@ static Task StartHeartbeatLoopAsync(
 {
     return Task.Run(async () =>
     {
-        var wsOk = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
-        if (wsOk)
-            return;
-
         var intervalSeconds = Math.Max(5, heartbeatIntervalSeconds);
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(intervalSeconds));
+        var wsEverConnected = false;
+        var wsConsecutiveFailures = 0;
 
-        while (await timer.WaitForNextTickAsync(cancellationToken))
+        while (!cancellationToken.IsCancellationRequested)
         {
+            var wsResult = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
+            if (wsResult == 1)
+            {
+                wsEverConnected = true;
+                wsConsecutiveFailures = 0;
+                continue;
+            }
+
+            wsConsecutiveFailures++;
+            var shouldFallbackHttp = wsEverConnected || wsConsecutiveFailures >= 3;
+            if (!shouldFallbackHttp)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                continue;
+            }
+
             try
             {
                 var snapshot = runtimeProfile.GetSnapshot();
@@ -447,9 +508,14 @@ static Task StartHeartbeatLoopAsync(
                     Name = snapshot.Name,
                     Version = currentVersion,
                     Platform = clientPlatform,
+                    RuntimeStatus = runtimeState.Status,
+                    CurrentTaskTotalIps = runtimeState.TotalIps,
+                    CurrentTaskTestedIps = runtimeState.TestedIps,
+                    CurrentTaskStartedAt = runtimeState.StartedAt,
+                    RuntimeLog = runtimeState.LogText,
                 };
                 var json = JsonSerializer.Serialize(req, AppJsonContext.Default.ClientHeartbeatRequest);
-                var resp = await httpClient.PostAsync(
+                var resp = await transportState.HttpClient.PostAsync(
                     $"{serverUrl}/api/client/heartbeat",
                     new StringContent(json, Encoding.UTF8, "application/json"),
                     cancellationToken);
@@ -459,7 +525,7 @@ static Task StartHeartbeatLoopAsync(
                 var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
-                    ApplyAuthoritativeClientMetadata(runtimeProfile, result.Data.EffectiveIsp, result.Data.EffectiveName);
+                    ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, result.Data.EffectiveIsp, result.Data.EffectiveName, result.Data.EffectiveProxyMode, result.Data.EffectiveProxyUrl);
                     if (result.Data.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
                     {
                         immediateFetchSignal.Release();
@@ -467,7 +533,7 @@ static Task StartHeartbeatLoopAsync(
                     if (result.Data.ForceCheckUpdate)
                     {
                         Console.WriteLine("Manual update trigger received. Checking update immediately...");
-                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, httpClient);
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, transportState.HttpClient);
                     }
 
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
@@ -486,19 +552,19 @@ static Task StartHeartbeatLoopAsync(
             {
                 // 心跳失败不打断主测速流程
             }
-        }
 
-        if (!cancellationToken.IsCancellationRequested)
-        {
-            await StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, currentVersion, clientPlatform, autoUpdate, httpClient, intervalSeconds, immediateFetchSignal, cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cancellationToken);
         }
     }, cancellationToken);
 }
 
-static async Task<bool> TryStartWebSocketHeartbeatAsync(
+static async Task<int> TryStartWebSocketHeartbeatAsync(
     string serverUrl,
     string clientId,
     ClientRuntimeProfile runtimeProfile,
+    ClientRuntimeState runtimeState,
+    ClientProxySettings proxySettings,
+    ClientTransportState transportState,
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
@@ -513,8 +579,31 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
         Console.WriteLine("WebSocket heartbeat connected.");
 
         var intervalSeconds = 30;
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(intervalSeconds));
-        var receiveBuffer = new byte[8192];
+        var receiveTask = Task.Run(async () =>
+        {
+            var receiveBuffer = new byte[8192];
+            while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
+            {
+                var result = await ws.ReceiveAsync(receiveBuffer, cancellationToken);
+                if (result.MessageType == WebSocketMessageType.Close)
+                    break;
+
+                var body = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
+                var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
+                if (msg is not null)
+                {
+                    ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, msg.EffectiveIsp, msg.EffectiveName, msg.EffectiveProxyMode, msg.EffectiveProxyUrl);
+                    intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
+                    if ((msg.ForceFetchTask || string.Equals(msg.Type, "trigger-test", StringComparison.OrdinalIgnoreCase)) && immediateFetchSignal.CurrentCount == 0)
+                        immediateFetchSignal.Release();
+                    if (msg.ForceCheckUpdate)
+                    {
+                        Console.WriteLine("Manual update trigger received via WebSocket. Checking update immediately...");
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, transportState.HttpClient);
+                    }
+                }
+            }
+        }, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
         {
@@ -527,41 +616,27 @@ static async Task<bool> TryStartWebSocketHeartbeatAsync(
                 Name = snapshot.Name,
                 Version = currentVersion,
                 Platform = clientPlatform,
+                RuntimeStatus = runtimeState.Status,
+                CurrentTaskTotalIps = runtimeState.TotalIps,
+                CurrentTaskTestedIps = runtimeState.TestedIps,
+                CurrentTaskStartedAt = runtimeState.StartedAt,
+                RuntimeLog = runtimeState.LogText,
             };
             var json = JsonSerializer.Serialize(heartbeat, AppJsonContext.Default.ClientWsMessage);
             var bytes = Encoding.UTF8.GetBytes(json);
             await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
-
-            var result = await ws.ReceiveAsync(receiveBuffer, cancellationToken);
-            if (result.MessageType == WebSocketMessageType.Close)
-                break;
-
-            var body = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
-            var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
-            if (msg is not null)
-            {
-                ApplyAuthoritativeClientMetadata(runtimeProfile, msg.EffectiveIsp, msg.EffectiveName);
-                intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
-                if ((msg.ForceFetchTask || string.Equals(msg.Type, "trigger-test", StringComparison.OrdinalIgnoreCase)) && immediateFetchSignal.CurrentCount == 0)
-                    immediateFetchSignal.Release();
-                if (msg.ForceCheckUpdate)
-                {
-                    Console.WriteLine("Manual update trigger received via WebSocket. Checking update immediately...");
-                    await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
-                }
-            }
-
-            if (!await timer.WaitForNextTickAsync(cancellationToken))
-                break;
+            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cancellationToken);
         }
 
-        Console.WriteLine("WebSocket heartbeat disconnected. Falling back to HTTP heartbeat.");
-        return false;
+        await receiveTask;
+
+        Console.WriteLine("WebSocket heartbeat disconnected.");
+        return 1;
     }
     catch
     {
-        Console.WriteLine("WebSocket heartbeat unavailable. Falling back to HTTP heartbeat.");
-        return false;
+        Console.WriteLine("WebSocket heartbeat unavailable.");
+        return 0;
     }
 }
 
@@ -572,17 +647,22 @@ static string BuildWebSocketUrl(string serverUrl, string clientId, IspType isp)
     return $"{scheme}://{baseUri.Authority}/api/client/ws?clientId={Uri.EscapeDataString(clientId)}&isp={Uri.EscapeDataString(isp.ToString())}";
 }
 
-static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile, IspType effectiveIsp, string? effectiveName)
+static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile, ClientProxySettings proxySettings, ClientTransportState transportState, IspType effectiveIsp, string? effectiveName, string? effectiveProxyMode, string? effectiveProxyUrl)
 {
-    if (string.IsNullOrWhiteSpace(effectiveName))
+    var metadataChanged = false;
+    if (!string.IsNullOrWhiteSpace(effectiveName))
     {
-        return;
+        metadataChanged = runtimeProfile.Update(effectiveIsp, effectiveName);
+        if (metadataChanged)
+        {
+            Console.WriteLine($"Server metadata updated: ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}");
+        }
     }
 
-    var changed = runtimeProfile.Update(effectiveIsp, effectiveName);
-    if (changed)
+    if (proxySettings.Update(effectiveProxyMode, effectiveProxyUrl))
     {
-        Console.WriteLine($"Server metadata updated: ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}");
+        transportState.RecreateHttpClient();
+        Console.WriteLine($"Server proxy config updated: Mode={proxySettings.Mode}, Url={proxySettings.Url}");
     }
 }
 
@@ -594,6 +674,21 @@ static async Task WaitForFetchSignalAsync(SemaphoreSlim immediateFetchSignal)
         await immediateFetchSignal.WaitAsync();
     }
     Console.WriteLine("Server test trigger received. Fetching task immediately...");
+}
+
+static async Task WaitForRetryOrFetchSignalAsync(TimeSpan delay, SemaphoreSlim immediateFetchSignal)
+{
+    var delayTask = Task.Delay(delay);
+    var signalTask = immediateFetchSignal.WaitAsync();
+    var completed = await Task.WhenAny(delayTask, signalTask);
+    if (completed == signalTask)
+    {
+        while (immediateFetchSignal.CurrentCount > 0)
+        {
+            await immediateFetchSignal.WaitAsync();
+        }
+        Console.WriteLine("Server test trigger received during retry wait. Fetching task immediately...");
+    }
 }
 
 // ============================================================
@@ -654,7 +749,7 @@ static async Task TestTcpAsync(IpTestResult result, string ip, int port, int dur
 //  HTTPS 下载速度测试
 // ============================================================
 static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTemplate,
-    string host, int port, int durationSeconds, double maxDownloadSpeedKBps)
+    string host, int port, int durationSeconds, double maxDownloadSpeedKBps, ClientProxySettings proxySettings)
 {
     try
     {
@@ -682,6 +777,21 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
             },
             PooledConnectionLifetime = TimeSpan.FromSeconds(30),
         };
+
+        if (string.Equals(proxySettings.Mode, "system", StringComparison.OrdinalIgnoreCase))
+        {
+            handler.UseProxy = true;
+        }
+        else if (string.Equals(proxySettings.Mode, "custom", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(proxySettings.Url))
+        {
+            handler.UseProxy = true;
+            handler.Proxy = new WebProxy(proxySettings.Url);
+        }
+        else
+        {
+            handler.UseProxy = false;
+            handler.Proxy = null;
+        }
 
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(durationSeconds + 10) };
         client.DefaultRequestHeaders.Host = host;
@@ -908,6 +1018,172 @@ sealed class ClientRuntimeProfile
             _isp = isp;
             _name = name;
             return true;
+        }
+    }
+}
+
+sealed class ClientRuntimeState
+{
+    private readonly object _lock = new();
+    private string _status = "等待触发";
+    private int _totalIps;
+    private int _testedIps;
+    private DateTime? _startedAt;
+    private readonly Queue<string> _logLines = new();
+    private const int MaxLogLines = 200;
+
+    public string Status
+    {
+        get { lock (_lock) return _status; }
+    }
+
+    public int TotalIps
+    {
+        get { lock (_lock) return _totalIps; }
+    }
+
+    public int TestedIps
+    {
+        get { lock (_lock) return _testedIps; }
+    }
+
+    public DateTime? StartedAt
+    {
+        get { lock (_lock) return _startedAt; }
+    }
+
+    public string LogText
+    {
+        get { lock (_lock) return string.Join("\n", _logLines); }
+    }
+
+    public void SetWaiting()
+    {
+        lock (_lock)
+        {
+            _status = "等待触发";
+            _totalIps = 0;
+            _testedIps = 0;
+            _startedAt = null;
+        }
+    }
+
+    public void SetTesting(int totalIps, int testedIps)
+    {
+        lock (_lock)
+        {
+            _status = "正在测速";
+            _totalIps = totalIps;
+            _testedIps = testedIps;
+            _startedAt ??= DateTime.UtcNow;
+        }
+    }
+
+    public void SetCompleted(int totalIps, int resultCount)
+    {
+        lock (_lock)
+        {
+            _status = $"已完成测速（保留 {resultCount} 个结果）";
+            _totalIps = totalIps;
+            _testedIps = totalIps;
+        }
+    }
+
+    public void AppendLog(string line)
+    {
+        lock (_lock)
+        {
+            _logLines.Enqueue($"[{DateTime.Now:HH:mm:ss}] {line}");
+            while (_logLines.Count > MaxLogLines)
+            {
+                _logLines.Dequeue();
+            }
+        }
+    }
+}
+
+sealed class ClientProxySettings
+{
+    private readonly object _lock = new();
+    private string _mode = "direct";
+    private string _url = string.Empty;
+
+    public string Mode { get { lock (_lock) return _mode; } }
+    public string Url { get { lock (_lock) return _url; } }
+
+    public bool Update(string? mode, string? url)
+    {
+        var newMode = string.IsNullOrWhiteSpace(mode) ? "direct" : mode.Trim().ToLowerInvariant();
+        if (newMode != "direct" && newMode != "system" && newMode != "custom")
+            newMode = "direct";
+        var newUrl = newMode == "custom" ? (url ?? string.Empty).Trim() : string.Empty;
+
+        lock (_lock)
+        {
+            if (_mode == newMode && _url == newUrl)
+                return false;
+            _mode = newMode;
+            _url = newUrl;
+            return true;
+        }
+    }
+}
+
+sealed class ClientTransportState : IDisposable
+{
+    private readonly object _lock = new();
+    private readonly ClientProxySettings _proxySettings;
+    private HttpClient _httpClient;
+
+    public ClientTransportState(ClientProxySettings proxySettings)
+    {
+        _proxySettings = proxySettings;
+        _httpClient = BuildHttpClient();
+    }
+
+    public HttpClient HttpClient
+    {
+        get { lock (_lock) return _httpClient; }
+    }
+
+    public ClientProxySettings ProxySettings => _proxySettings;
+
+    public void RecreateHttpClient()
+    {
+        lock (_lock)
+        {
+            var old = _httpClient;
+            _httpClient = BuildHttpClient();
+            old.Dispose();
+        }
+    }
+
+    private HttpClient BuildHttpClient()
+    {
+        var handler = new HttpClientHandler();
+        if (string.Equals(_proxySettings.Mode, "system", StringComparison.OrdinalIgnoreCase))
+        {
+            handler.UseProxy = true;
+        }
+        else if (string.Equals(_proxySettings.Mode, "custom", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_proxySettings.Url))
+        {
+            handler.UseProxy = true;
+            handler.Proxy = new WebProxy(_proxySettings.Url);
+        }
+        else
+        {
+            handler.UseProxy = false;
+            handler.Proxy = null;
+        }
+
+        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            _httpClient.Dispose();
         }
     }
 }

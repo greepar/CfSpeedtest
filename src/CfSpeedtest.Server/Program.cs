@@ -23,7 +23,6 @@ builder.Services.AddSingleton<DataStore>();
 builder.Services.AddSingleton<IpPoolService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IpPoolService>());
 builder.Services.AddSingleton<DnsUpdateService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<DnsUpdateService>());
 builder.Services.AddSingleton<RoundCoordinatorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundCoordinatorService>());
 builder.Services.AddSingleton<ClientWsHub>();
@@ -107,6 +106,11 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
         Name = existing?.Name ?? (req.Name ?? $"{req.Isp}-{clientId[..6]}"),
         Version = string.IsNullOrWhiteSpace(req.Version) ? existing?.Version : req.Version,
         Platform = string.IsNullOrWhiteSpace(req.Platform) ? existing?.Platform : req.Platform,
+        RuntimeStatus = existing?.RuntimeStatus,
+        CurrentTaskTotalIps = existing?.CurrentTaskTotalIps ?? 0,
+        CurrentTaskTestedIps = existing?.CurrentTaskTestedIps ?? 0,
+        CurrentTaskStartedAt = existing?.CurrentTaskStartedAt,
+        RuntimeLog = existing?.RuntimeLog,
         RegisteredAt = existing?.RegisteredAt ?? DateTime.UtcNow,
         LastSeenAt = DateTime.UtcNow,
         IsOnline = true,
@@ -122,6 +126,8 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
         EffectiveIsp = info.Isp,
         EffectiveName = info.Name ?? $"{info.Isp}-{clientId[..6]}",
+        EffectiveProxyMode = config.ClientProxyMode,
+        EffectiveProxyUrl = config.ClientProxyUrl,
     });
 });
 
@@ -156,6 +162,11 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
 
     client.Version = string.IsNullOrWhiteSpace(req.Version) ? client.Version : req.Version;
     client.Platform = string.IsNullOrWhiteSpace(req.Platform) ? client.Platform : req.Platform;
+    client.RuntimeStatus = string.IsNullOrWhiteSpace(req.RuntimeStatus) ? client.RuntimeStatus : req.RuntimeStatus;
+    client.CurrentTaskTotalIps = req.CurrentTaskTotalIps;
+    client.CurrentTaskTestedIps = req.CurrentTaskTestedIps;
+    client.CurrentTaskStartedAt = req.CurrentTaskStartedAt;
+    client.RuntimeLog = string.IsNullOrWhiteSpace(req.RuntimeLog) ? client.RuntimeLog : req.RuntimeLog;
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
     store.UpsertClient(client);
@@ -169,6 +180,8 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(req.ClientId),
         EffectiveIsp = client.Isp,
         EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
+        EffectiveProxyMode = config.ClientProxyMode,
+        EffectiveProxyUrl = config.ClientProxyUrl,
     });
 });
 
@@ -204,7 +217,9 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
         HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
         Message = "ws connected",
         EffectiveIsp = client.Isp,
-        EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}"
+        EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
+        EffectiveProxyMode = store.GetConfig().ClientProxyMode,
+        EffectiveProxyUrl = store.GetConfig().ClientProxyUrl,
     };
     await hub.SendAsync(clientId, hello, context.RequestAborted);
 
@@ -222,11 +237,16 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
             if (msg is null) continue;
 
             client = store.GetClient(clientId) ?? client;
-            client.Version = string.IsNullOrWhiteSpace(msg.Version) ? client.Version : msg.Version;
-            client.Platform = string.IsNullOrWhiteSpace(msg.Platform) ? client.Platform : msg.Platform;
+    client.Version = string.IsNullOrWhiteSpace(msg.Version) ? client.Version : msg.Version;
+    client.Platform = string.IsNullOrWhiteSpace(msg.Platform) ? client.Platform : msg.Platform;
+    client.RuntimeStatus = string.IsNullOrWhiteSpace(msg.RuntimeStatus) ? client.RuntimeStatus : msg.RuntimeStatus;
+            client.CurrentTaskTotalIps = msg.CurrentTaskTotalIps;
+            client.CurrentTaskTestedIps = msg.CurrentTaskTestedIps;
+            client.CurrentTaskStartedAt = msg.CurrentTaskStartedAt;
+            client.RuntimeLog = string.IsNullOrWhiteSpace(msg.RuntimeLog) ? client.RuntimeLog : msg.RuntimeLog;
             client.LastSeenAt = DateTime.UtcNow;
-            client.IsOnline = true;
-            store.UpsertClient(client);
+    client.IsOnline = true;
+    store.UpsertClient(client);
 
             var response = new ClientWsMessage
             {
@@ -237,6 +257,8 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
                 ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(clientId),
                 EffectiveIsp = client.Isp,
                 EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
+                EffectiveProxyMode = store.GetConfig().ClientProxyMode,
+                EffectiveProxyUrl = store.GetConfig().ClientProxyUrl,
             };
             await hub.SendAsync(clientId, response, context.RequestAborted);
         }
@@ -427,7 +449,7 @@ app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataSto
     if (!auth.ValidateLogin(store, req.Username, req.Password))
         return ApiResponse<WebUiAuthStatus>.Fail("用户名或密码错误");
 
-    var token = auth.CreateSession(conf.Username);
+    var token = auth.CreateSession(store, http, conf.Username);
     auth.SignIn(http, token);
     return ApiResponse<WebUiAuthStatus>.Ok(new WebUiAuthStatus
     {
@@ -437,10 +459,15 @@ app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataSto
     });
 });
 
-app.MapPost("/api/auth/logout", (HttpContext http, WebUiAuthService auth) =>
+app.MapPost("/api/auth/logout", (HttpContext http, DataStore store, WebUiAuthService auth) =>
 {
-    auth.SignOut(http);
+    auth.SignOut(http, store);
     return ApiResponse<string>.Ok("Logged out");
+});
+
+app.MapGet("/api/auth/sessions", (DataStore store, WebUiAuthService auth) =>
+{
+    return ApiResponse<List<WebUiSessionOverview>>.Ok(auth.GetSessionOverviews(store));
 });
 
 app.MapPost("/api/auth/change-password", (WebUiChangePasswordRequest req, DataStore store, WebUiAuthService auth) =>
@@ -541,7 +568,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
     var round = rounds.RegisterClient(client.Isp, clientId);
 
     var wait = round.ScheduledAtUtc - DateTime.UtcNow;
-    if (wait > TimeSpan.Zero)
+    if (!round.IsImmediateDispatch && wait > TimeSpan.Zero)
     {
         return Results.Json(ApiResponse<SpeedTestTask>.Fail($"Round not started yet. Retry after {Math.Ceiling(wait.TotalSeconds)} seconds."));
     }
@@ -567,6 +594,11 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         ScheduledAtUtc = round.ScheduledAtUtc,
     };
 
+    if (round.IsImmediateDispatch)
+    {
+        rounds.MarkTriggerTaskDispatched(clientId, client.Isp);
+    }
+
     return Results.Json(ApiResponse<SpeedTestTask>.Ok(task));
 });
 
@@ -585,6 +617,10 @@ app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, Round
         return ApiResponse<string>.Fail("Client is not allowed to connect");
 
     client.LastSeenAt = DateTime.UtcNow;
+    client.RuntimeStatus = "已完成测速";
+    client.CurrentTaskTestedIps = report.Results.Count;
+    client.CurrentTaskTotalIps = Math.Max(client.CurrentTaskTotalIps, report.Results.Count);
+    client.RuntimeLog = client.RuntimeLog;
     store.UpsertClient(client);
 
     var history = new TestHistory
@@ -720,6 +756,18 @@ app.MapPost("/api/clients/{clientId}/allow", (string clientId, bool allowed, Dat
 app.MapGet("/api/history", (DataStore store, int? limit) =>
 {
     return ApiResponse<List<TestHistory>>.Ok(store.GetHistory(limit ?? 100));
+});
+
+app.MapPost("/api/history/cleanup", (DataStore store) =>
+{
+    var removed = store.ApplyHistoryRetention();
+    return ApiResponse<string>.Ok($"已清理 {removed} 条过期测速记录");
+});
+
+app.MapPost("/api/history/clear", (DataStore store) =>
+{
+    var removed = store.ClearHistory();
+    return ApiResponse<string>.Ok($"已清空 {removed} 条测速记录");
 });
 
 // ============================================================

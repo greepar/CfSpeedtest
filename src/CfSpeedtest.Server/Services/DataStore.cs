@@ -221,8 +221,42 @@ public class DataStore
     public void AddHistory(TestHistory history)
     {
         _history.Add(history);
-        // 只保留最近500条
-        PersistFile("history.json", _history.OrderByDescending(h => h.CompletedAt).Take(500).ToList());
+        ApplyHistoryRetention();
+    }
+
+    public int ApplyHistoryRetention()
+    {
+        var retentionDays = _config.HistoryRetentionDays;
+        var before = _history.Count;
+
+        IEnumerable<TestHistory> retained = _history;
+        if (retentionDays > 0)
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
+            retained = retained.Where(h => h.CompletedAt >= cutoff);
+        }
+
+        var kept = retained
+            .OrderByDescending(h => h.CompletedAt)
+            .Take(500)
+            .ToList();
+
+        _history.Clear();
+        foreach (var item in kept.OrderBy(h => h.CompletedAt))
+        {
+            _history.Add(item);
+        }
+
+        PersistFile("history.json", kept);
+        return before - _history.Count;
+    }
+
+    public int ClearHistory()
+    {
+        var count = _history.Count;
+        _history.Clear();
+        PersistFile("history.json", new List<TestHistory>());
+        return count;
     }
 
     // ===== Persistence =====

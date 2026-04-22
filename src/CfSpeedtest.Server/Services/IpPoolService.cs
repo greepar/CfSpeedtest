@@ -72,8 +72,32 @@ public class IpPoolService : BackgroundService
 
                 if (ips.Count > 0)
                 {
-                    _store.MergeApiIps(isp, ips);
-                    _logger.LogInformation("Fetched {Count} IPs for {Isp} from API & DoH", ips.Count, isp);
+                    if (config.AutoCleanupEnabled)
+                    {
+                        var manualIps = sourceConfig.ManualIps ?? [];
+                        var existingApiIps = _store.GetApiIpPool(isp);
+                        var existingAll = manualIps.Concat(existingApiIps).ToHashSet();
+                        var targetPoolSize = Math.Max(config.BatchSize, config.TopN);
+                        var needCount = Math.Max(0, targetPoolSize - existingAll.Count);
+                        var refillIps = ips.Where(ip => !existingAll.Contains(ip)).Take(needCount).ToList();
+
+                        if (refillIps.Count > 0)
+                        {
+                            _store.MergeApiIps(isp, refillIps);
+                        }
+
+                        _logger.LogInformation(
+                            "Fetched {FetchedCount} IPs for {Isp}; auto-cleanup enabled, refilled {AddedCount} IPs to target pool size {TargetPoolSize}",
+                            ips.Count,
+                            isp,
+                            refillIps.Count,
+                            targetPoolSize);
+                    }
+                    else
+                    {
+                        _store.MergeApiIps(isp, ips);
+                        _logger.LogInformation("Fetched {Count} IPs for {Isp} from API & DoH", ips.Count, isp);
+                    }
                 }
             }
             catch (Exception ex)

@@ -14,6 +14,38 @@ function Write-Log([string]$Message) {
     Write-Host "[CfSpeedtest] $Message"
 }
 
+function Test-IsAdministrator {
+    return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Quote-Argument([string]$Value) {
+    if ($null -eq $Value) { return '""' }
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Restart-Elevated {
+    $argList = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $PSCommandPath,
+        '-ServerUrl', $ServerUrl,
+        '-ClientId', $ClientId,
+        '-Isp', $Isp,
+        '-ClientName', $ClientName,
+        '-Repository', $Repository,
+        '-ReleaseTag', $ReleaseTag
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($GhProxyPrefix)) {
+        $argList += @('-GhProxyPrefix', $GhProxyPrefix)
+    }
+
+    $argumentString = ($argList | ForEach-Object { Quote-Argument $_ }) -join ' '
+    Write-Log '当前不是管理员权限，正在请求 UAC 提权以安装/更新 NSSM 服务...'
+    $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentString -Verb RunAs -Wait -PassThru
+    exit $proc.ExitCode
+}
+
 function Get-Platform {
     switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
         'Arm64' { return 'win-arm64' }
@@ -34,8 +66,8 @@ function Get-NssmUrl {
     return 'https://nssm.cc/release/nssm-2.24.zip'
 }
 
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw '请以管理员身份运行此 PowerShell 脚本'
+if (-not (Test-IsAdministrator)) {
+    Restart-Elevated
 }
 
 if ([string]::IsNullOrWhiteSpace($ClientName)) {

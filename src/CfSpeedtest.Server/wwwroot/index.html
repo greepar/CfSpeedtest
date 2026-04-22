@@ -226,9 +226,124 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
     padding: 24px;
     box-shadow: 0 20px 80px rgba(0, 0, 0, .45);
 }
+.modal-scroll {
+    max-height: min(85vh, 900px);
+    overflow-y: auto;
+}
+.compact-command-box {
+    max-height: 120px;
+    overflow-y: auto;
+}
+.fold-section {
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+}
+.fold-section summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    list-style: none;
+}
+.fold-section summary::-webkit-details-marker { display: none; }
+.fold-section summary::before { content: '▸ '; }
+.fold-section[open] summary::before { content: '▾ '; }
+.toolbar-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+.toolbar-spacer { flex: 1; }
+.segmented {
+    display: inline-grid;
+    grid-auto-flow: column;
+    gap: 0;
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.segmented .tab {
+    border-bottom: none;
+    min-width: 110px;
+    text-align: center;
+    padding: 10px 18px;
+}
+.segmented .tab.active {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+    border-bottom: none;
+}
+.compact-note {
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+.compact-card {
+    background: var(--bg);
+    padding: 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    margin-bottom: 12px;
+}
+.install-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 16px;
+    align-items: start;
+}
+.options-panel {
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+}
+.command-panel {
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+}
+.options-panel h3,
+.command-panel h3 {
+    margin: 0 0 10px;
+    color: var(--accent);
+    font-size: 15px;
+}
+.option-list {
+    display: grid;
+    gap: 10px;
+}
+.option-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+}
+.option-item input[type="checkbox"] {
+    width: auto;
+}
+.compact-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
 .login-card h2 { color: var(--accent); margin-bottom: 10px; }
 .login-card p { font-size: 13px; color: var(--text2); margin-bottom: 16px; }
 .muted-note { font-size: 12px; color: var(--text2); margin-top: 8px; }
+@media (max-width: 768px) {
+    .form-row { grid-template-columns: 1fr; }
+    .install-layout { grid-template-columns: 1fr; }
+    .segmented { width: 100%; }
+    .segmented .tab { min-width: 0; }
+}
 </style>
 </head>
 <body>
@@ -289,6 +404,10 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 <div id="panel-history" class="panel">
     <div class="card">
         <h2>测速历史</h2>
+        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+            <button class="btn btn-secondary" type="button" onclick="cleanupHistory()">立即清理过期记录</button>
+            <button class="btn danger-btn" type="button" onclick="clearHistory()">清空全部测速记录</button>
+        </div>
         <div id="history-list"></div>
     </div>
 </div>
@@ -297,8 +416,8 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 <div id="panel-clients" class="panel">
     <div class="card">
         <h2>已注册客户端</h2>
-        <div style="background:var(--bg); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:16px;">
-            <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
                 <label style="font-size:13px; color:var(--text2); white-space:nowrap; margin:0;">严格白名单模式</label>
                 <select id="client-whitelist-only" style="width:auto;">
                     <option value="false">关闭</option>
@@ -307,12 +426,31 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                 <button class="btn btn-primary" onclick="saveClientWhitelistOnly()">保存白名单设置</button>
                 <span style="font-size:12px; color:var(--text2);">启用后，只有已预生成且允许连接的 clientId 才能接入服务端</span>
             </div>
+            <button class="btn btn-primary" type="button" onclick="openClientAddDialog()">+ 添加客户端</button>
+        </div>
+        <div id="clients-list"></div>
+    </div>
+</div>
 
-            <div style="border-top:1px solid var(--border); padding-top:12px;">
-                <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">一键安装模式</h3>
-                <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
-                    这里会根据服务端地址、clientId、运营商和客户端名称，自动生成类似 <span style="font-family:monospace;">wget | bash</span> 的一键安装命令。
-                    安装脚本本体来自 GitHub Release 资产，Linux 使用 <span style="font-family:monospace;">systemd</span>，macOS 使用 <span style="font-family:monospace;">launchd</span>，Windows 使用开机自启动计划任务。
+<div id="client-add-overlay" class="login-overlay">
+    <div class="login-card modal-scroll" style="width:min(860px, calc(100vw - 24px)); padding:18px;">
+        <h2>添加客户端</h2>
+        <div class="compact-note">
+            在一个弹窗里完成 clientId 预生成、一键安装命令和手动启动命令复制。
+        </div>
+        <div class="compact-card">
+            <div class="toolbar-row">
+                <div class="segmented">
+                    <div id="install-tab-linux" class="tab active" onclick="switchInstallScriptPlatform('linux')">Linux</div>
+                    <div id="install-tab-windows" class="tab" onclick="switchInstallScriptPlatform('windows')">Windows</div>
+                    <div id="install-tab-macos" class="tab" onclick="switchInstallScriptPlatform('macos')">macOS</div>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid var(--border); padding-top:10px;">
+                <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">一键部署指令</h3>
+                <div class="compact-note">
+                    自动生成安装命令。Linux 自动适配 <span style="font-family:monospace;">systemd / openrc / OpenWrt procd</span>，macOS 使用 <span style="font-family:monospace;">launchd</span>，Windows 使用开机自启动计划任务。
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -341,76 +479,95 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                         </div>
                     </div>
                 </div>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; margin-bottom:8px;">
-                    <button class="btn btn-primary" onclick="reserveClientId()">生成并加入允许列表</button>
-                    <button class="btn btn-secondary" type="button" onclick="copyInstallOneLiner()">复制一键安装命令</button>
-                </div>
-                <div>
-                    <div style="display:flex; gap:8px; margin-bottom:12px;">
-                        <div id="install-tab-linux" class="tab active" onclick="switchInstallScriptPlatform('linux')">Linux</div>
-                        <div id="install-tab-macos" class="tab" onclick="switchInstallScriptPlatform('macos')">macOS</div>
-                        <div id="install-tab-windows" class="tab" onclick="switchInstallScriptPlatform('windows')">Windows</div>
+                <div class="install-layout">
+                    <div class="options-panel">
+                        <h3>安装选项</h3>
+                        <div class="option-list">
+                            <label class="option-item"><input type="checkbox" id="client-option-disable-auto-update"> 禁用自动更新</label>
+                            <label class="option-item"><input type="checkbox" id="client-option-include-uninstall" checked> 显示卸载命令</label>
+                            <label class="option-item"><input type="checkbox" id="client-option-show-manual"> 显示手动启动命令</label>
+                            <label class="option-item"><input type="checkbox" id="client-option-show-proxy" checked> 包含代理配置</label>
+                        </div>
                     </div>
-                    <div id="install-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备脚本...</div>
-                    <div id="install-script-oneliner" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
-                    <button class="btn btn-secondary" type="button" onclick="refreshInstallScript()">刷新命令</button>
+                    <div class="command-panel">
+                        <h3>部署命令</h3>
+                        <div class="compact-note">根据当前平台和选项即时生成。Linux 自动适配 <span style="font-family:monospace;">systemd / openrc / OpenWrt procd</span>。</div>
+                        <div id="install-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备脚本...</div>
+                        <div id="install-script-oneliner" class="compact-command-box" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
+                        <div class="compact-actions">
+                            <button class="btn btn-primary" onclick="reserveClientId()">生成并加入允许列表</button>
+                            <button class="btn btn-secondary" type="button" onclick="copyInstallOneLiner()">复制</button>
+                            <button class="btn btn-secondary" type="button" onclick="refreshInstallScript()">刷新</button>
+                        </div>
+                    </div>
                 </div>
 
-                <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
-                    <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">卸载方法</h3>
+                <details id="client-uninstall-section" class="fold-section">
+                    <summary>卸载方法</summary>
                     <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
                         用于卸载当前已经安装好的客户端服务。会停止服务并删除安装目录；不会删除服务端上的客户端记录。
                     </div>
                     <div id="uninstall-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备卸载命令...</div>
-                    <div id="uninstall-script-oneliner" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
+                    <div id="uninstall-script-oneliner" class="compact-command-box" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
                     <button class="btn btn-secondary" type="button" onclick="copyUninstallOneLiner()">复制卸载命令</button>
-                </div>
+                </details>
 
-                <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
-                    <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">手动模式 / 无自动安装</h3>
-                    <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
-                        这里是纯手动启动模式。选择运营商、名称和服务端地址后，点击“生成并加入允许列表”，下方会显示生成出来的 clientId 和手动启动命令。
+                <details id="client-manual-section" class="fold-section">
+                    <summary>手动模式 / 无自动安装</summary>
+                    <div class="compact-note">
+                        纯手动启动模式，适合不安装服务或仅复制启动参数的场景。
                     </div>
-                    <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                        <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text2); cursor:pointer;">
-                            <input id="reserve-client-disable-auto-update" type="checkbox" style="width:auto;" />
-                            手动模式启动时禁用自动更新（追加 <span style="font-family:monospace;">--disable-auto-update</span>）
-                        </label>
-                    </div>
+                    <div class="compact-note">是否追加 <span style="font-family:monospace;">--disable-auto-update</span> 由左侧“禁用自动更新”选项控制。</div>
                     <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制手动启动命令</button>
-                    <div id="reserved-client-command" data-command="" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
-                </div>
+                    <div id="reserved-client-command" data-command="" class="compact-command-box" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
+                </details>
             </div>
         </div>
-        <div id="client-edit-panel" style="display:none; background:var(--bg); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:16px;">
-            <h3 style="margin:0 0 12px; color:var(--accent); font-size:15px;">编辑客户端服务端信息</h3>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>clientId</label>
-                    <input id="edit-client-id" readonly />
-                </div>
-                <div class="form-group">
-                    <label>客户端名称</label>
-                    <input id="edit-client-name" />
-                </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <button class="btn btn-secondary" type="button" onclick="closeClientAddDialog()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<div id="client-edit-overlay" class="login-overlay">
+    <div class="login-card" style="width:min(640px, calc(100vw - 32px));">
+        <h2>编辑客户端信息</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label>clientId</label>
+                <input id="edit-client-id" readonly />
             </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>运营商</label>
-                    <select id="edit-client-isp">
-                        <option value="Telecom">电信</option>
-                        <option value="Unicom">联通</option>
-                        <option value="Mobile">移动</option>
-                    </select>
-                </div>
-                <div class="form-group"></div>
-            </div>
-            <div style="display:flex; gap:8px;">
-                <button class="btn btn-primary" type="button" onclick="saveClientMetadata()">保存客户端信息</button>
-                <button class="btn btn-secondary" type="button" onclick="cancelClientMetadataEdit()">取消</button>
+            <div class="form-group">
+                <label>客户端名称</label>
+                <input id="edit-client-name" />
             </div>
         </div>
-        <div id="clients-list"></div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>运营商</label>
+                <select id="edit-client-isp">
+                    <option value="Telecom">电信</option>
+                    <option value="Unicom">联通</option>
+                    <option value="Mobile">移动</option>
+                </select>
+            </div>
+            <div class="form-group"></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <button class="btn btn-secondary" type="button" onclick="closeClientEditDialog()">取消</button>
+            <button class="btn btn-primary" type="button" onclick="saveClientMetadata()">保存客户端信息</button>
+        </div>
+    </div>
+</div>
+
+<div id="client-log-overlay" class="login-overlay">
+    <div class="login-card" style="width:min(960px, calc(100vw - 32px));">
+        <h2>客户端详细状态</h2>
+        <div id="client-log-meta" style="font-size:12px;color:var(--text2);margin-bottom:10px;"></div>
+        <textarea id="client-log-text" readonly style="min-height:360px;font-family:monospace;"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+            <button class="btn btn-secondary" type="button" onclick="closeClientLogOverlay()">关闭</button>
+        </div>
     </div>
 </div>
 
@@ -476,6 +633,7 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
         <p style="color:var(--text2);font-size:13px;margin-bottom:16px;">
             根据各运营商客户端的测速结果，自动将最优 IP 更新到华为云 DNS 解析记录。
             每个运营商的客户端分别测速后，系统聚合所有同运营商客户端的 TopN 结果，取最优 IP 更新到对应域名。
+            自动更新不是独立定时器，而是<strong>在每轮测速收口时</strong>检查是否达到最小更新间隔。
         </p>
 
         <!-- 华为云全局凭证配置 -->
@@ -490,7 +648,7 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>自动更新间隔（分钟，0=仅手动触发）</label>
+                    <label>最小自动更新间隔（分钟，0=每轮收口都更新）</label>
                     <input id="hw-interval" type="number" value="30" min="0" />
                 </div>
             </div>
@@ -504,16 +662,6 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                 <div class="form-group">
                     <label>Secret Key (SK)</label>
                     <input id="hw-secret-key" type="password" placeholder="your-secret-key" />
-                </div>
-                <div class="form-group">
-                    <label>账号 ID（X-Domain-ID，可选）</label>
-                    <input id="hw-domain-id" placeholder="domain-id-optional" />
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>项目 ID（X-Project-ID，可选）</label>
-                    <input id="hw-project-id" placeholder="project-id-optional" />
                 </div>
                 <div class="form-group">
                     <label>DNS API Endpoint</label>
@@ -627,6 +775,13 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             </div>
             <div class="form-row">
                 <div class="form-group">
+                    <label>测速记录保留天数 (0=不自动清理)</label>
+                    <input id="cfg-history-retention-days" type="number" min="0" />
+                </div>
+                <div class="form-group"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
                     <label>最低下载速度阈值 (KB/s)</label>
                     <input id="cfg-min-download-speed" type="number" min="0" step="0.1" />
                 </div>
@@ -647,12 +802,19 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>仅允许白名单 clientId 连接</label>
-                    <select id="cfg-client-whitelist-only" style="width:auto;">
-                        <option value="false">关闭</option>
-                        <option value="true">启用</option>
+                    <label>客户端代理模式</label>
+                    <select id="cfg-client-proxy-mode" style="width:auto;" onchange="syncClientProxyMode()">
+                        <option value="direct">不遵循系统代理</option>
+                        <option value="system">遵循系统代理</option>
+                        <option value="custom">自定义代理</option>
                     </select>
                 </div>
+                <div class="form-group client-proxy-custom-fields">
+                    <label>自定义代理地址</label>
+                    <input id="cfg-client-proxy-url" placeholder="如: http://127.0.0.1:7890" />
+                </div>
+            </div>
+            <div class="form-row">
                 <div class="form-group">
                     <label>启用客户端自动更新</label>
                     <select id="cfg-client-update-enabled" style="width:auto;">
@@ -660,6 +822,7 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                         <option value="true">启用</option>
                     </select>
                 </div>
+                <div class="form-group"></div>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -702,7 +865,7 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
     <div class="card">
         <h2>登录管理</h2>
         <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
-            修改 WebUI 登录用户名和密码。保存后当前所有登录会话会失效，需要重新登录。
+            修改 WebUI 登录用户名和密码。浏览器登录会话会持久化保存，服务器重启后仍保持已登录状态；修改凭据后当前所有登录会话会失效，需要重新登录。
         </div>
         <div class="form-row">
             <div class="form-group">
@@ -726,6 +889,10 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
         </div>
         <button class="btn btn-primary" type="button" onclick="changePassword()">更新登录凭据</button>
     </div>
+    <div class="card" style="margin-top:16px;">
+        <h2>已登录设备</h2>
+        <div id="auth-sessions-list"></div>
+    </div>
 </div>
 
 </div>
@@ -740,6 +907,9 @@ let serverConfigData = null;
 let roundStatusData = null;
 let roundCountdownTimer = null;
 let roundRefreshTimer = null;
+let clientsRefreshTimer = null;
+let clientLogRefreshTimer = null;
+let currentClientLogId = null;
 let authStatus = null;
 
 // ========== Tab switching ==========
@@ -752,9 +922,10 @@ function switchTab(name) {
     document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
     document.getElementById('panel-' + name).classList.add('active');
     if (name !== 'dashboard') stopDashboardAutoRefresh();
+    if (name !== 'clients') stopClientsAutoRefresh();
     if (name === 'dashboard') loadDashboard();
     if (name === 'history') loadHistory();
-    if (name === 'clients') loadClients();
+    if (name === 'clients') { loadClients(); startClientsAutoRefresh(); }
     if (name === 'ippool') loadIpPool();
     if (name === 'dns') loadDnsPanel();
     if (name === 'settings') loadConfig();
@@ -908,6 +1079,33 @@ function changePassword() {
     });
 }
 
+function loadAuthSessions() {
+    var el = document.getElementById('auth-sessions-list');
+    if (!el) return;
+    api('/api/auth/sessions').then(function(r) {
+        var data = r.data || [];
+        if (data.length === 0) {
+            el.innerHTML = '<div class="empty-state">当前没有活跃登录设备</div>';
+            return;
+        }
+        var html = '<table><thead><tr><th>用户名</th><th>IP</th><th>User-Agent</th><th>创建时间</th><th>最后活跃</th><th>过期时间</th></tr></thead><tbody>';
+        data.forEach(function(s) {
+            html += '<tr>' +
+                '<td>' + escapeHtml(s.username || '-') + '</td>' +
+                '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(s.ipAddress || '-') + '</td>' +
+                '<td style="font-size:12px;max-width:360px;word-break:break-all;">' + escapeHtml(s.userAgent || '-') + '</td>' +
+                '<td>' + fmtTime(s.createdAtUtc) + '</td>' +
+                '<td>' + fmtTime(s.lastSeenAtUtc) + '</td>' +
+                '<td>' + fmtTime(s.expiresAtUtc) + '</td>' +
+                '</tr>';
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    }).catch(function(err) {
+        el.innerHTML = '<div class="empty-state">加载失败: ' + escapeHtml(err.message || 'unknown') + '</div>';
+    });
+}
+
 // ========== Dashboard ==========
 
 function loadDashboard() {
@@ -984,6 +1182,29 @@ function stopDashboardAutoRefresh() {
     if (roundRefreshTimer !== null) {
         clearInterval(roundRefreshTimer);
         roundRefreshTimer = null;
+    }
+}
+
+function startClientsAutoRefresh() {
+    if (clientsRefreshTimer !== null) return;
+    clientsRefreshTimer = setInterval(function() {
+        var panel = document.getElementById('panel-clients');
+        if (!panel || !panel.classList.contains('active')) return;
+        loadClients();
+        if (currentClientLogId) {
+            showClientLog(currentClientLogId, true);
+        }
+    }, 3000);
+}
+
+function stopClientsAutoRefresh() {
+    if (clientsRefreshTimer !== null) {
+        clearInterval(clientsRefreshTimer);
+        clientsRefreshTimer = null;
+    }
+    if (clientLogRefreshTimer !== null) {
+        clearInterval(clientLogRefreshTimer);
+        clientLogRefreshTimer = null;
     }
 }
 
@@ -1131,6 +1352,33 @@ function loadHistory() {
     });
 }
 
+function cleanupHistory() {
+    api('/api/history/cleanup', 'POST').then(function(r) {
+        if (r.success) {
+            toast(r.data || r.message || '已清理过期测速记录');
+            loadHistory();
+        } else {
+            toast(r.message || '清理失败', false);
+        }
+    }).catch(function(err) {
+        toast('清理失败: ' + err.message, false);
+    });
+}
+
+function clearHistory() {
+    if (!confirm('确认清空全部测速记录吗？此操作不可恢复。')) return;
+    api('/api/history/clear', 'POST').then(function(r) {
+        if (r.success) {
+            toast(r.data || r.message || '已清空测速记录');
+            loadHistory();
+        } else {
+            toast(r.message || '清空失败', false);
+        }
+    }).catch(function(err) {
+        toast('清空失败: ' + err.message, false);
+    });
+}
+
 // ========== Clients ==========
 
 function loadClients() {
@@ -1147,12 +1395,16 @@ function loadClients() {
             document.getElementById('clients-list').innerHTML = '<div class="empty-state">暂无客户端</div>';
             return;
         }
-        var html = '<table><thead><tr><th>ID</th><th>名称</th><th>运营商</th><th>版本</th><th>平台</th><th>状态</th><th>允许连接</th><th>注册时间</th><th>最后活跃</th><th>操作</th></tr></thead><tbody>';
+        var html = '<table><thead><tr><th>ID</th><th>名称</th><th>运营商</th><th>版本</th><th>平台</th><th>在线</th><th>当前状态</th><th>允许连接</th><th>注册时间</th><th>最后活跃</th><th>操作</th></tr></thead><tbody>';
         data.forEach(function(c) {
             var isOnline = c.isOnline !== false && (Date.now() - new Date(c.lastSeenAt).getTime()) < 5 * 60 * 1000;
             var allowed = c.allowed !== false;
             var nextAllowed = allowed ? 'false' : 'true';
             var allowLabel = allowed ? '已允许' : '已禁用';
+            var runtimeStatus = c.runtimeStatus || (isOnline ? '空闲' : '-');
+            if (runtimeStatus === '正在测速' && (c.currentTaskTotalIps || 0) > 0) {
+                runtimeStatus += ' (' + (c.currentTaskTestedIps || 0) + '/' + (c.currentTaskTotalIps || 0) + ')';
+            }
             html += '<tr>' +
                 '<td style="font-family:monospace;font-size:12px;">' + c.clientId.substring(0,12) + '</td>' +
                 '<td>' + (c.name || '-') + '</td>' +
@@ -1160,10 +1412,12 @@ function loadClients() {
                 '<td style="font-family:monospace;font-size:12px;">' + (c.version || '-') + '</td>' +
                 '<td style="font-family:monospace;font-size:12px;">' + (c.platform || '-') + '</td>' +
                 '<td><span class="badge ' + (isOnline ? 'badge-online' : 'badge-offline') + '">' + (isOnline ? '在线' : '离线') + '</span></td>' +
+                '<td style="font-size:12px;">' + runtimeStatus + '</td>' +
                 '<td><button class="btn ' + (allowed ? 'btn-secondary' : 'danger-btn') + '" onclick="toggleClientAllowed(this)" data-client-id="' + escapeHtmlAttr(c.clientId) + '" data-allowed="' + nextAllowed + '">' + allowLabel + '</button></td>' +
                 '<td>' + fmtTime(c.registeredAt) + '</td>' +
                 '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
                 '<td style="display:flex; gap:6px;">' +
+                '<button class="btn btn-secondary" onclick="showClientLog(\'' + c.clientId.replace(/'/g, "\\'") + '\')">详情</button>' +
                 '<button class="btn btn-secondary" onclick="editClientMetadata(\'' + c.clientId.replace(/'/g, "\\'") + '\', \'' + String(c.name || '').replace(/'/g, "\\'") + '\', \'' + String(c.isp || '').replace(/'/g, "\\'") + '\')">编辑</button>' +
                 '<button class="btn btn-secondary" onclick="triggerClientRetest(\'' + c.clientId.replace(/'/g, "\\'") + '\')">重新测速</button>' +
                 '<button class="btn btn-secondary" onclick="triggerClientUpdate(\'' + c.clientId.replace(/'/g, "\\'") + '\')">触发更新</button>' +
@@ -1182,7 +1436,7 @@ function syncClientCommandGenerator() {
     if (!serverInput.value) {
         serverInput.value = window.location.origin;
     }
-    ['reserve-client-server', 'reserve-client-name', 'reserve-client-isp', 'reserved-client-id'].forEach(function(id) {
+    ['reserve-client-server', 'reserve-client-name', 'reserve-client-isp', 'reserved-client-id', 'client-option-disable-auto-update', 'client-option-include-uninstall', 'client-option-show-manual', 'client-option-show-proxy'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el && !el.dataset.installScriptBound) {
             el.addEventListener('input', refreshInstallScript);
@@ -1191,6 +1445,15 @@ function syncClientCommandGenerator() {
         }
     });
     refreshInstallScript();
+}
+
+function openClientAddDialog() {
+    document.getElementById('client-add-overlay').classList.add('active');
+    syncClientCommandGenerator();
+}
+
+function closeClientAddDialog() {
+    document.getElementById('client-add-overlay').classList.remove('active');
 }
 
 var currentInstallScriptPlatform = 'linux';
@@ -1247,7 +1510,7 @@ function buildInstallOneLiner(url, params) {
         psArgs.push('-ClientName ' + psSingleQuote(params.name));
         psArgs.push('-Repository ' + psSingleQuote((serverConfigData.clientUpdateRepository || '').trim()));
         psArgs.push('-ReleaseTag ' + psSingleQuote((serverConfigData.clientUpdateReleaseTag || '').trim()));
-        if ((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
+        if (document.getElementById('client-option-show-proxy').checked && (serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
             psArgs.push('-GhProxyPrefix ' + psSingleQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
         }
 
@@ -1265,7 +1528,7 @@ function buildInstallOneLiner(url, params) {
     suffix.push('--name ' + shellQuote(params.name));
     suffix.push('--repository ' + shellQuote((serverConfigData.clientUpdateRepository || '').trim()));
     suffix.push('--release-tag ' + shellQuote((serverConfigData.clientUpdateReleaseTag || '').trim()));
-    if ((serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
+    if (document.getElementById('client-option-show-proxy').checked && (serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
         suffix.push('--gh-proxy-prefix ' + shellQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
     }
 
@@ -1299,7 +1562,7 @@ function refreshInstallScript() {
         return;
     }
 
-    var serviceKind = currentInstallScriptPlatform === 'windows' ? 'scheduled-task' : (currentInstallScriptPlatform === 'macos' ? 'launchd' : 'systemd');
+    var serviceKind = currentInstallScriptPlatform === 'windows' ? 'scheduled-task' : (currentInstallScriptPlatform === 'macos' ? 'launchd' : 'auto-detect');
     var fileName = currentInstallScriptPlatform === 'windows'
         ? 'install-cfspeedtest-client-windows.ps1'
         : (currentInstallScriptPlatform === 'macos' ? 'install-cfspeedtest-client-macos.sh' : 'install-cfspeedtest-client-linux.sh');
@@ -1311,6 +1574,10 @@ function refreshInstallScript() {
         '脚本地址: <span style="font-family:monospace;">' + escapeHtml(scriptUrl) + '</span>';
 
     refreshUninstallScript();
+    var uninstallSection = document.getElementById('client-uninstall-section');
+    var manualSection = document.getElementById('client-manual-section');
+    if (uninstallSection) uninstallSection.open = !!document.getElementById('client-option-include-uninstall').checked;
+    if (manualSection) manualSection.open = !!document.getElementById('client-option-show-manual').checked;
 }
 
 function buildUninstallScriptInfo(platform) {
@@ -1337,12 +1604,23 @@ function buildUninstallScriptInfo(platform) {
     }
 
     return {
-        label: 'Linux 卸载（systemd）',
-        command: 'sudo systemctl stop cfspeedtest-client 2>/dev/null; ' +
-            'sudo systemctl disable cfspeedtest-client 2>/dev/null; ' +
-            'sudo rm -f /etc/systemd/system/cfspeedtest-client.service; ' +
-            'sudo systemctl daemon-reload; ' +
-            'sudo rm -rf /opt/cfspeedtest-client'
+        label: 'Linux 卸载（自动适配 systemd / openrc / OpenWrt procd）',
+        command: 'sudo sh -c ' + shellQuote(
+            'SERVICE_NAME="cfspeedtest-client"; ' +
+            'if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then ' +
+                'systemctl stop "$SERVICE_NAME" 2>/dev/null || true; ' +
+                'systemctl disable "$SERVICE_NAME" 2>/dev/null || true; ' +
+                'rm -f "/etc/systemd/system/${SERVICE_NAME}.service"; ' +
+                'systemctl daemon-reload; ' +
+            'elif [ -f /etc/openwrt_release ] || [ -f /etc/rc.common ]; then ' +
+                'if [ -x "/etc/init.d/${SERVICE_NAME}" ]; then "/etc/init.d/${SERVICE_NAME}" stop 2>/dev/null || true; "/etc/init.d/${SERVICE_NAME}" disable 2>/dev/null || true; rm -f "/etc/init.d/${SERVICE_NAME}"; fi; ' +
+            'elif command -v rc-service >/dev/null 2>&1 || [ -x /sbin/openrc-run ]; then ' +
+                'rc-service "$SERVICE_NAME" stop 2>/dev/null || true; ' +
+                'rc-update del "$SERVICE_NAME" default 2>/dev/null || true; ' +
+                'rm -f "/etc/init.d/${SERVICE_NAME}"; ' +
+            'fi; ' +
+            'rm -rf /opt/cfspeedtest-client'
+        )
     };
 }
 
@@ -1360,7 +1638,6 @@ function refreshUninstallScript() {
 function saveClientWhitelistOnly() {
     if (!serverConfigData) return;
     serverConfigData.clientWhitelistOnly = document.getElementById('client-whitelist-only').value === 'true';
-    document.getElementById('cfg-client-whitelist-only').value = serverConfigData.clientWhitelistOnly ? 'true' : 'false';
     api('/api/config', 'POST', serverConfigData).then(function(r) {
         if (r.success) toast('白名单模式已更新');
         else toast(r.message || '保存失败', false);
@@ -1378,7 +1655,7 @@ function reserveClientId() {
         }
 
         var clientId = r.data.clientId;
-        var disableAutoUpdate = document.getElementById('reserve-client-disable-auto-update').checked;
+        var disableAutoUpdate = document.getElementById('client-option-disable-auto-update').checked;
         var command = 'CfSpeedtest.Client.exe --server ' + server +
             ' --client-id ' + clientId +
             ' --isp ' + isp +
@@ -1476,11 +1753,11 @@ function editClientMetadata(clientId, currentName, currentIsp) {
     document.getElementById('edit-client-id').value = clientId;
     document.getElementById('edit-client-name').value = currentName || '';
     document.getElementById('edit-client-isp').value = currentIsp || 'Telecom';
-    document.getElementById('client-edit-panel').style.display = 'block';
+    document.getElementById('client-edit-overlay').classList.add('active');
 }
 
-function cancelClientMetadataEdit() {
-    document.getElementById('client-edit-panel').style.display = 'none';
+function closeClientEditDialog() {
+    document.getElementById('client-edit-overlay').classList.remove('active');
 }
 
 function saveClientMetadata() {
@@ -1498,7 +1775,7 @@ function saveClientMetadata() {
     }).then(function(r) {
         if (r.success) {
             toast('客户端名称和运营商已更新，在线客户端会立即或在下次心跳时同步');
-            cancelClientMetadataEdit();
+            closeClientEditDialog();
             loadClients();
         } else {
             toast(r.message || '更新失败', false);
@@ -1540,6 +1817,38 @@ function triggerClientUpdate(clientId) {
             toast(r.message || '触发失败', false);
         }
     });
+}
+
+function showClientLog(clientId, silent) {
+    currentClientLogId = clientId;
+    api('/api/clients').then(function(r) {
+        var data = r.data || [];
+        var client = data.find(function(c) { return c.clientId === clientId; });
+        if (!client) {
+            if (!silent) toast('客户端不存在', false);
+            return;
+        }
+        document.getElementById('client-log-meta').textContent =
+            '客户端: ' + (client.name || '-') + ' | 状态: ' + (client.runtimeStatus || '-') +
+            ' | 进度: ' + (client.currentTaskTestedIps || 0) + '/' + (client.currentTaskTotalIps || 0) +
+            ' | 最后活跃: ' + fmtTime(client.lastSeenAt);
+        document.getElementById('client-log-text').value = client.runtimeLog || '暂无详细输出';
+        document.getElementById('client-log-overlay').classList.add('active');
+        if (clientLogRefreshTimer === null) {
+            clientLogRefreshTimer = setInterval(function() {
+                if (currentClientLogId) showClientLog(currentClientLogId, true);
+            }, 2000);
+        }
+    });
+}
+
+function closeClientLogOverlay() {
+    document.getElementById('client-log-overlay').classList.remove('active');
+    currentClientLogId = null;
+    if (clientLogRefreshTimer !== null) {
+        clearInterval(clientLogRefreshTimer);
+        clientLogRefreshTimer = null;
+    }
 }
 
 function triggerClientRetest(clientId) {
@@ -1836,11 +2145,14 @@ function loadConfig() {
         document.getElementById('cfg-tcpdur').value = c.tcpTestDurationSeconds || 10;
         document.getElementById('cfg-topn').value = c.topN || 5;
         document.getElementById('cfg-client-interval').value = c.clientIntervalMinutes || 60;
+        document.getElementById('cfg-history-retention-days').value = c.historyRetentionDays != null ? c.historyRetentionDays : 30;
         document.getElementById('cfg-min-download-speed').value = c.minDownloadSpeedKBps || 0;
         document.getElementById('cfg-max-download-speed').value = c.maxDownloadSpeedKBps || 0;
         document.getElementById('cfg-apiinterval').value = c.apiRefreshIntervalMinutes || 60;
-        document.getElementById('cfg-heartbeat-interval').value = c.heartbeatIntervalSeconds || 30;
-        document.getElementById('cfg-client-whitelist-only').value = c.clientWhitelistOnly ? 'true' : 'false';
+        document.getElementById('cfg-heartbeat-interval').value = c.heartbeatIntervalSeconds || 5;
+        document.getElementById('cfg-client-proxy-mode').value = c.clientProxyMode || 'direct';
+        document.getElementById('cfg-client-proxy-url').value = c.clientProxyUrl || '';
+        syncClientProxyMode();
         document.getElementById('cfg-client-update-enabled').value = c.clientUpdateEnabled ? 'true' : 'false';
         document.getElementById('cfg-client-update-source-type').value = c.clientUpdateSourceType || 'github';
         document.getElementById('cfg-latest-client-version').value = c.latestClientVersion || '';
@@ -1857,6 +2169,7 @@ function loadConfig() {
             clientWhitelist.value = c.clientWhitelistOnly ? 'true' : 'false';
         }
         loadClientUpdateOverview();
+        loadAuthSessions();
     });
 }
 
@@ -1907,11 +2220,13 @@ function saveConfig(e) {
     serverConfigData.tcpTestDurationSeconds = parseInt(document.getElementById('cfg-tcpdur').value) || 10;
     serverConfigData.topN = parseInt(document.getElementById('cfg-topn').value) || 5;
     serverConfigData.clientIntervalMinutes = parseInt(document.getElementById('cfg-client-interval').value) || 60;
+    serverConfigData.historyRetentionDays = Math.max(0, parseInt(document.getElementById('cfg-history-retention-days').value) || 0);
     serverConfigData.minDownloadSpeedKBps = parseFloat(document.getElementById('cfg-min-download-speed').value) || 0;
     serverConfigData.maxDownloadSpeedKBps = parseFloat(document.getElementById('cfg-max-download-speed').value) || 0;
     serverConfigData.apiRefreshIntervalMinutes = parseInt(document.getElementById('cfg-apiinterval').value) || 60;
-    serverConfigData.heartbeatIntervalSeconds = parseInt(document.getElementById('cfg-heartbeat-interval').value) || 30;
-    serverConfigData.clientWhitelistOnly = document.getElementById('cfg-client-whitelist-only').value === 'true';
+    serverConfigData.heartbeatIntervalSeconds = parseInt(document.getElementById('cfg-heartbeat-interval').value) || 5;
+    serverConfigData.clientProxyMode = document.getElementById('cfg-client-proxy-mode').value;
+    serverConfigData.clientProxyUrl = document.getElementById('cfg-client-proxy-url').value.trim();
     serverConfigData.clientUpdateEnabled = document.getElementById('cfg-client-update-enabled').value === 'true';
     serverConfigData.clientUpdateSourceType = document.getElementById('cfg-client-update-source-type').value;
     serverConfigData.latestClientVersion = document.getElementById('cfg-latest-client-version').value.trim();
@@ -1922,6 +2237,13 @@ function saveConfig(e) {
     api('/api/config', 'POST', serverConfigData).then(function(r) {
         if (r.success) toast('全局配置已保存');
         else toast(r.message || '保存失败', false);
+    });
+}
+
+function syncClientProxyMode() {
+    var mode = document.getElementById('cfg-client-proxy-mode').value;
+    document.querySelectorAll('.client-proxy-custom-fields').forEach(function(el) {
+        el.style.display = mode === 'custom' ? '' : 'none';
     });
 }
 
@@ -1960,8 +2282,6 @@ function fillDnsGlobalFields() {
     document.getElementById('hw-interval').value = hw.updateIntervalMinutes != null ? hw.updateIntervalMinutes : 30;
     document.getElementById('hw-access-key').value = hw.accessKey || '';
     document.getElementById('hw-secret-key').value = hw.secretKey || '';
-    document.getElementById('hw-domain-id').value = hw.domainId || '';
-    document.getElementById('hw-project-id').value = hw.projectId || '';
     document.getElementById('hw-endpoint').value = hw.endpoint || 'https://dns.cn-north-4.myhuaweicloud.com';
 }
 
@@ -1984,8 +2304,6 @@ function saveHuaweiDnsConfig() {
     hw.accessKey = document.getElementById('hw-access-key').value.trim();
     var sk = document.getElementById('hw-secret-key').value;
     if (sk) hw.secretKey = sk;
-    hw.domainId = document.getElementById('hw-domain-id').value.trim();
-    hw.projectId = document.getElementById('hw-project-id').value;
     hw.endpoint = document.getElementById('hw-endpoint').value;
     
     serverConfigData.huaweiDns = hw;

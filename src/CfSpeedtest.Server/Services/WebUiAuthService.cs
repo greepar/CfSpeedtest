@@ -41,6 +41,20 @@ public class WebUiAuthService
             config.WebUiAuth = auth;
             store.SaveConfig(config);
         }
+
+        _sessions.Clear();
+        foreach (var session in auth.Sessions.Where(s => s.ExpiresAtUtc > DateTime.UtcNow && !string.IsNullOrWhiteSpace(s.Token)))
+        {
+            _sessions[session.Token] = new SessionInfo
+            {
+                Username = session.Username,
+                UserAgent = session.UserAgent,
+                IpAddress = session.IpAddress,
+                CreatedAtUtc = session.CreatedAtUtc,
+                ExpiresAtUtc = session.ExpiresAtUtc,
+                LastSeenAtUtc = session.LastSeenAtUtc,
+            };
+        }
     }
 
     public bool ValidateLogin(DataStore store, string username, string password)
@@ -58,15 +72,20 @@ public class WebUiAuthService
             Encoding.UTF8.GetBytes(auth.PasswordHash));
     }
 
-    public string CreateSession(string username)
+    public string CreateSession(DataStore store, HttpContext context, string username)
     {
-        CleanupExpiredSessions();
+        CleanupExpiredSessions(store);
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         _sessions[token] = new SessionInfo
         {
             Username = username,
-            ExpiresAtUtc = DateTime.UtcNow.Add(_sessionLifetime)
+            UserAgent = context.Request.Headers.UserAgent.ToString(),
+            IpAddress = context.Connection.RemoteIpAddress?.ToString() ?? string.Empty,
+            CreatedAtUtc = DateTime.UtcNow,
+            ExpiresAtUtc = DateTime.UtcNow.Add(_sessionLifetime),
+            LastSeenAtUtc = DateTime.UtcNow,
         };
+        PersistSessions(store);
         return token;
     }
 
@@ -89,11 +108,14 @@ public class WebUiAuthService
         if (session.ExpiresAtUtc <= DateTime.UtcNow)
         {
             _sessions.TryRemove(token, out _);
+            PersistSessions(store);
             return false;
         }
 
         session.ExpiresAtUtc = DateTime.UtcNow.Add(_sessionLifetime);
+        session.LastSeenAtUtc = DateTime.UtcNow;
         _sessions[token] = session;
+        PersistSessions(store);
         username = session.Username;
         return true;
     }
@@ -109,12 +131,13 @@ public class WebUiAuthService
         });
     }
 
-    public void SignOut(HttpContext context)
+    public void SignOut(HttpContext context, DataStore store)
     {
         if (context.Request.Cookies.TryGetValue(CookieName, out var token) && !string.IsNullOrWhiteSpace(token))
         {
             _sessions.TryRemove(token, out _);
         }
+        PersistSessions(store);
         context.Response.Cookies.Delete(CookieName);
     }
 
@@ -131,23 +154,63 @@ public class WebUiAuthService
         SetCredentials(auth, newUsername.Trim(), newPassword);
         config.WebUiAuth = auth;
         store.SaveConfig(config);
-        ClearAllSessions();
+        ClearAllSessions(store);
         return true;
     }
 
-    private void ClearAllSessions()
+    public List<WebUiSessionOverview> GetSessionOverviews(DataStore store)
     {
-        _sessions.Clear();
+        CleanupExpiredSessions(store);
+        return _sessions.Values
+            .OrderByDescending(s => s.LastSeenAtUtc)
+            .Select(s => new WebUiSessionOverview
+            {
+                Username = s.Username,
+                UserAgent = s.UserAgent,
+                IpAddress = s.IpAddress,
+                CreatedAtUtc = s.CreatedAtUtc,
+                ExpiresAtUtc = s.ExpiresAtUtc,
+                LastSeenAtUtc = s.LastSeenAtUtc,
+            })
+            .ToList();
     }
 
-    private void CleanupExpiredSessions()
+    private void ClearAllSessions(DataStore store)
+    {
+        _sessions.Clear();
+        PersistSessions(store);
+    }
+
+    private void CleanupExpiredSessions(DataStore store)
     {
         var now = DateTime.UtcNow;
+        var changed = false;
         foreach (var pair in _sessions)
         {
             if (pair.Value.ExpiresAtUtc <= now)
+            {
                 _sessions.TryRemove(pair.Key, out _);
+                changed = true;
+            }
         }
+        if (changed)
+            PersistSessions(store);
+    }
+
+    private void PersistSessions(DataStore store)
+    {
+        var config = store.GetConfig();
+        config.WebUiAuth.Sessions = _sessions.Select(kv => new WebUiSessionInfo
+        {
+            Token = kv.Key,
+            Username = kv.Value.Username,
+            UserAgent = kv.Value.UserAgent,
+            IpAddress = kv.Value.IpAddress,
+            CreatedAtUtc = kv.Value.CreatedAtUtc,
+            ExpiresAtUtc = kv.Value.ExpiresAtUtc,
+            LastSeenAtUtc = kv.Value.LastSeenAtUtc,
+        }).ToList();
+        store.SaveConfig(config);
     }
 
     private static void SetCredentials(WebUiAuthConfig auth, string username, string password)
@@ -167,6 +230,10 @@ public class WebUiAuthService
     private sealed class SessionInfo
     {
         public string Username { get; set; } = string.Empty;
+        public string UserAgent { get; set; } = string.Empty;
+        public string IpAddress { get; set; } = string.Empty;
+        public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
         public DateTime ExpiresAtUtc { get; set; }
+        public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
     }
 }
