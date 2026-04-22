@@ -41,7 +41,7 @@ function Restart-Elevated {
     }
 
     $argumentString = ($argList | ForEach-Object { Quote-Argument $_ }) -join ' '
-    Write-Log '当前不是管理员权限，正在请求 UAC 提权以安装/更新 NSSM 服务...'
+    Write-Log 'Administrator rights are required. Requesting UAC elevation to install/update the NSSM service...'
     $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentString -Verb RunAs -Wait -PassThru
     exit $proc.ExitCode
 }
@@ -86,21 +86,21 @@ $nssmDir = Join-Path $installDir 'nssm'
 $nssmZipPath = Join-Path $env:TEMP 'nssm-2.24.zip'
 $nssmStageDir = Join-Path $env:TEMP ("nssm-" + [guid]::NewGuid().ToString('N'))
 
-Write-Log "平台: $platform"
-Write-Log "下载地址: $downloadUrl"
+Write-Log "Platform: $platform"
+Write-Log "Download URL: $downloadUrl"
 
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 New-Item -ItemType Directory -Path $nssmDir -Force | Out-Null
 
-Write-Log '下载客户端...'
+Write-Log 'Downloading client package...'
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 
-Write-Log '解压客户端...'
+Write-Log 'Extracting client package...'
 Expand-Archive -Path $zipPath -DestinationPath $stageDir -Force
 Copy-Item -Path (Join-Path $stageDir '*') -Destination $installDir -Recurse -Force
 
-Write-Log '准备 NSSM...'
+Write-Log 'Preparing NSSM...'
 $nssmExe = Join-Path $nssmDir 'nssm.exe'
 if (-not (Test-Path $nssmExe)) {
     Invoke-WebRequest -Uri (Get-NssmUrl) -OutFile $nssmZipPath
@@ -115,10 +115,10 @@ if (-not (Test-Path $nssmExe)) {
 
 $argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service"
 
-Write-Log '安装/更新 Windows Service...'
+Write-Log 'Installing/updating Windows Service...'
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($null -ne $existingService) {
-    Write-Log '检测到已存在的 Windows Service，准备覆盖更新...'
+    Write-Log 'Existing Windows Service detected. Replacing it...'
     & $nssmExe stop $serviceName | Out-Null
     & $nssmExe remove $serviceName confirm | Out-Null
 }
@@ -138,6 +138,6 @@ Remove-Item -Path $stageDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $nssmZipPath -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $nssmStageDir -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Log '安装完成'
-Write-Log "查看服务: sc query $serviceName"
-Write-Log "查看 NSSM: $nssmExe"
+Write-Log 'Install completed.'
+Write-Log "Check service: sc query $serviceName"
+Write-Log "Check NSSM: $nssmExe"
