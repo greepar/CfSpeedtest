@@ -38,16 +38,8 @@ jobs:
             archive_name: cfspeedtest-client-linux-x64
             archive_ext: zip
           - runner: ubuntu-latest
-            rid: linux-musl-x64
-            archive_name: cfspeedtest-client-linux-musl-x64
-            archive_ext: zip
-          - runner: ubuntu-latest
             rid: linux-arm64
             archive_name: cfspeedtest-client-linux-arm64
-            archive_ext: zip
-          - runner: ubuntu-latest
-            rid: linux-musl-arm64
-            archive_name: cfspeedtest-client-linux-musl-arm64
             archive_ext: zip
           - runner: ubuntu-latest
             rid: linux-arm
@@ -72,7 +64,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Install Linux ARM64 cross-compilation tools
-        if: runner.os == 'Linux' && (matrix.rid == 'linux-arm64' || matrix.rid == 'linux-musl-arm64')
+        if: runner.os == 'Linux' && matrix.rid == 'linux-arm64'
         run: |
           sudo apt-get update
           sudo apt-get install -y clang llvm lld gcc-aarch64-linux-gnu zlib1g-dev
@@ -97,7 +89,7 @@ jobs:
           /p:StripSymbols=true
           ${{ runner.os == 'Linux' && '-p:LinkerFlavor=lld' || '' }}
         env:
-          COMPlus_CrossCompiling: ${{ (matrix.rid == 'linux-arm64' || matrix.rid == 'linux-musl-arm64' || matrix.rid == 'linux-arm') && '1' || '0' }}
+          COMPlus_CrossCompiling: ${{ (matrix.rid == 'linux-arm64' || matrix.rid == 'linux-arm') && '1' || '0' }}
 
       - name: Remove debug symbols (Windows)
         if: runner.os == 'Windows'
@@ -130,9 +122,54 @@ jobs:
           name: ${{ matrix.archive_name }}
           path: ${{ matrix.archive_name }}.${{ matrix.archive_ext }}
 
+  build-musl-x64:
+    name: Build (linux-musl-x64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build inside Alpine container
+        run: >
+          docker run --rm
+          -v "$PWD:/workspace"
+          -w /workspace
+          mcr.microsoft.com/dotnet/sdk:10.0-alpine
+          sh -lc "apk add --no-cache bash git zip clang lld build-base zlib-dev openssl-dev icu-data-full && dotnet restore ${{ env.PROJECT_PATH }} -r linux-musl-x64 && dotnet publish ${{ env.PROJECT_PATH }} -c Release -r linux-musl-x64 --self-contained true -o publish/linux-musl-x64 /p:PublishSingleFile=true /p:StripSymbols=true -p:LinkerFlavor=lld && find ./publish/linux-musl-x64 -type f -name '*.pdb' -delete || true && find ./publish/linux-musl-x64 -type f -name '*.dbg' -delete || true && cd publish/linux-musl-x64 && zip -r ../../cfspeedtest-client-linux-musl-x64.zip ."
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfspeedtest-client-linux-musl-x64
+          path: cfspeedtest-client-linux-musl-x64.zip
+
+  build-musl-arm64:
+    name: Build (linux-musl-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build inside Alpine container
+        run: >
+          docker run --rm
+          -v "$PWD:/workspace"
+          -w /workspace
+          mcr.microsoft.com/dotnet/sdk:10.0-alpine
+          sh -lc "apk add --no-cache bash git zip clang lld build-base zlib-dev openssl-dev icu-data-full && dotnet restore ${{ env.PROJECT_PATH }} -r linux-musl-arm64 && dotnet publish ${{ env.PROJECT_PATH }} -c Release -r linux-musl-arm64 --self-contained true -o publish/linux-musl-arm64 /p:PublishSingleFile=true /p:StripSymbols=true -p:LinkerFlavor=lld && find ./publish/linux-musl-arm64 -type f -name '*.pdb' -delete || true && find ./publish/linux-musl-arm64 -type f -name '*.dbg' -delete || true && cd publish/linux-musl-arm64 && zip -r ../../cfspeedtest-client-linux-musl-arm64.zip ."
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfspeedtest-client-linux-musl-arm64
+          path: cfspeedtest-client-linux-musl-arm64.zip
+
   create-release:
     name: Create GitHub Release
-    needs: build-and-package
+    needs:
+      - build-and-package
+      - build-musl-x64
+      - build-musl-arm64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
