@@ -94,7 +94,7 @@ public class RoundCoordinatorService : BackgroundService
 
             foreach (var isp in isps)
             {
-                var startAtUtc = nowUtc;
+                var startAtUtc = nowUtc.AddSeconds(Math.Max(5, config.HeartbeatIntervalSeconds));
 
                 if (!Enum.TryParse<IspType>(isp, out var ispEnum))
                     continue;
@@ -135,7 +135,7 @@ public class RoundCoordinatorService : BackgroundService
         lock (_lock)
         {
             var ispKey = client.Isp.ToString();
-            var startAtUtc = nowUtc;
+            var startAtUtc = nowUtc.AddSeconds(Math.Max(5, config.HeartbeatIntervalSeconds));
             if (_latestFinalizedStartAtUtc.TryGetValue(ispKey, out var latestFinalizedAt) && latestFinalizedAt >= startAtUtc)
             {
                 return false;

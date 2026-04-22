@@ -357,6 +357,16 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                 </div>
 
                 <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
+                    <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">卸载方法</h3>
+                    <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
+                        用于卸载当前已经安装好的客户端服务。会停止服务并删除安装目录；不会删除服务端上的客户端记录。
+                    </div>
+                    <div id="uninstall-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备卸载命令...</div>
+                    <div id="uninstall-script-oneliner" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
+                    <button class="btn btn-secondary" type="button" onclick="copyUninstallOneLiner()">复制卸载命令</button>
+                </div>
+
+                <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
                     <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">手动模式 / 无自动安装</h3>
                     <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
                         这里是纯手动启动模式。选择运营商、名称和服务端地址后，点击“生成并加入允许列表”，下方会显示生成出来的 clientId 和手动启动命令。
@@ -1299,6 +1309,52 @@ function refreshInstallScript() {
         '服务托管: <span style="font-family:monospace;">' + serviceKind + '</span> &nbsp; ' +
         '文件名: <span style="font-family:monospace;">' + fileName + '</span> &nbsp; ' +
         '脚本地址: <span style="font-family:monospace;">' + escapeHtml(scriptUrl) + '</span>';
+
+    refreshUninstallScript();
+}
+
+function buildUninstallScriptInfo(platform) {
+    if (platform === 'windows') {
+        return {
+            label: 'Windows 卸载（管理员 PowerShell）',
+            command: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
+                '$serviceName=\'CfSpeedtestClient\';' +
+                '$installDir=Join-Path $env:ProgramFiles \'CfSpeedtestClient\';' +
+                '$nssmExe=Join-Path $installDir \'nssm\\nssm.exe\';' +
+                'if (Test-Path $nssmExe) { & $nssmExe stop $serviceName | Out-Null; & $nssmExe remove $serviceName confirm | Out-Null };' +
+                'if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }' +
+                '"'
+        };
+    }
+
+    if (platform === 'macos') {
+        return {
+            label: 'macOS 卸载（launchd）',
+            command: 'sudo launchctl bootout system /Library/LaunchDaemons/com.cfspeedtest.client.plist 2>/dev/null; ' +
+                'sudo rm -f /Library/LaunchDaemons/com.cfspeedtest.client.plist; ' +
+                'sudo rm -rf /opt/cfspeedtest-client'
+        };
+    }
+
+    return {
+        label: 'Linux 卸载（systemd）',
+        command: 'sudo systemctl stop cfspeedtest-client 2>/dev/null; ' +
+            'sudo systemctl disable cfspeedtest-client 2>/dev/null; ' +
+            'sudo rm -f /etc/systemd/system/cfspeedtest-client.service; ' +
+            'sudo systemctl daemon-reload; ' +
+            'sudo rm -rf /opt/cfspeedtest-client'
+    };
+}
+
+function refreshUninstallScript() {
+    var metaEl = document.getElementById('uninstall-script-meta');
+    var oneLinerEl = document.getElementById('uninstall-script-oneliner');
+    if (!metaEl || !oneLinerEl) return;
+
+    var info = buildUninstallScriptInfo(currentInstallScriptPlatform);
+    metaEl.textContent = info.label;
+    oneLinerEl.textContent = info.command;
+    oneLinerEl.dataset.command = info.command;
 }
 
 function saveClientWhitelistOnly() {
@@ -1363,6 +1419,15 @@ function copyInstallOneLiner() {
         return;
     }
     copyTextToClipboard(command, '一键安装命令已复制');
+}
+
+function copyUninstallOneLiner() {
+    var command = (document.getElementById('uninstall-script-oneliner').dataset.command || '').trim();
+    if (!command) {
+        toast('当前没有可复制的卸载命令', false);
+        return;
+    }
+    copyTextToClipboard(command, '卸载命令已复制');
 }
 
 function copyTextToClipboard(text, successMessage) {
