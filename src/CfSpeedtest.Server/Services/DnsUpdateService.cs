@@ -106,6 +106,7 @@ public class DnsUpdateService
         var ispKey = isp.ToString();
 
         var aggregatedResults = bestResults
+            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
             .OrderByDescending(r => r.Score)
             .GroupBy(r => r.IpAddress)
             .Select(g => g.First())
@@ -289,6 +290,7 @@ public class DnsUpdateService
     {
         var history = _store.GetHistory(500);
         var clients = _store.GetClients();
+        var config = _store.GetConfig();
 
         var ispClients = clients.Where(c => c.Isp == isp).Select(c => c.ClientId).ToHashSet();
 
@@ -300,6 +302,7 @@ public class DnsUpdateService
 
         var allResults = latestPerClient
             .SelectMany(h => h.Results)
+            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
             .OrderByDescending(r => r.Score)
             .ToList();
 

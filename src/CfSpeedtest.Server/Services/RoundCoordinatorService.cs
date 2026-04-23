@@ -370,9 +370,7 @@ public class RoundCoordinatorService : BackgroundService
             .Take(config.TopN)
             .ToList();
 
-        var topResults = qualifiedResults.Count > 0
-            ? qualifiedResults
-            : allRoundResults.Take(1).ToList();
+        var topResults = qualifiedResults;
 
         int removed = 0;
         if (config.AutoCleanupEnabled && topResults.Count > 0)
