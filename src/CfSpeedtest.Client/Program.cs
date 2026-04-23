@@ -110,6 +110,10 @@ while (true)
             : heartbeatIntervalSeconds;
         currentClientId = clientId;
         ApplyAuthoritativeClientMetadata(serverUrl, currentClientId, isService, runtimeProfile, proxySettings, transportState, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName, regResult.Data.EffectiveProxyMode, regResult.Data.EffectiveProxyUrl);
+        if (ShouldBackwriteServiceArguments(isService) && !string.IsNullOrWhiteSpace(currentClientId))
+        {
+            TryUpdateServiceArguments(serverUrl, currentClientId, runtimeProfile.Isp, runtimeProfile.Name);
+        }
         Console.WriteLine($"Registered as: {clientId}");
         runtimeState.AppendLog($"Registered as {clientId}");
         break;
@@ -676,7 +680,7 @@ static void ApplyAuthoritativeClientMetadata(string serverUrl, string clientId, 
         if (metadataChanged)
         {
             Console.WriteLine($"Server metadata updated: ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}");
-            if (isService && !string.IsNullOrWhiteSpace(clientId))
+            if (ShouldBackwriteServiceArguments(isService) && !string.IsNullOrWhiteSpace(clientId))
             {
                 TryUpdateServiceArguments(serverUrl, clientId, runtimeProfile.Isp, runtimeProfile.Name);
             }
@@ -688,6 +692,40 @@ static void ApplyAuthoritativeClientMetadata(string serverUrl, string clientId, 
         transportState.RecreateHttpClient();
         Console.WriteLine($"Server proxy config updated: Mode={proxySettings.Mode}, Url={proxySettings.Url}");
     }
+}
+
+static bool ShouldBackwriteServiceArguments(bool isService)
+{
+    return isService || HasManagedServiceInstall();
+}
+
+static bool HasManagedServiceInstall()
+{
+    try
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CfSpeedtestClient");
+            return File.Exists(Path.Combine(installDir, "nssm", "nssm.exe"));
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return File.Exists("/etc/systemd/system/cfspeedtest-client.service")
+                || File.Exists("/etc/init.d/cfspeedtest-client");
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return File.Exists("/Library/LaunchDaemons/uk.greepar.cfspeedtest.client.plist");
+        }
+    }
+    catch
+    {
+        // ignored
+    }
+
+    return false;
 }
 
 static async Task WaitForFetchSignalAsync(SemaphoreSlim immediateFetchSignal)
