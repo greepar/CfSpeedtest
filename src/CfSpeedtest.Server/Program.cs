@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Net.WebSockets;
+using System.IO;
 using CfSpeedtest.Server.Services;
 using CfSpeedtest.Shared;
 using Microsoft.AspNetCore.Http.Json;
@@ -231,11 +232,9 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
     {
         while (socket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
         {
-            var result = await socket.ReceiveAsync(buffer, context.RequestAborted);
-            if (result.MessageType == WebSocketMessageType.Close)
+            var json = await ReceiveWebSocketTextMessageAsync(socket, buffer, context.RequestAborted);
+            if (json is null)
                 break;
-
-            var json = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
             var msg = JsonSerializer.Deserialize(json, AppJsonContext.Default.ClientWsMessage);
             if (msg is null) continue;
 
@@ -924,6 +923,23 @@ static bool IsVersionNewer(string latestVersion, string currentVersion)
 static string GetClientUpdateFileName(string platform)
 {
     return $"cfspeedtest-client-{platform}.zip";
+}
+
+static async Task<string?> ReceiveWebSocketTextMessageAsync(WebSocket socket, byte[] buffer, CancellationToken cancellationToken)
+{
+    using var ms = new MemoryStream();
+    while (true)
+    {
+        var result = await socket.ReceiveAsync(buffer, cancellationToken);
+        if (result.MessageType == WebSocketMessageType.Close)
+            return null;
+
+        ms.Write(buffer, 0, result.Count);
+        if (result.EndOfMessage)
+            break;
+    }
+
+    return System.Text.Encoding.UTF8.GetString(ms.ToArray());
 }
 
 static string CombineProxyUrl(string proxyPrefix, string rawUrl)

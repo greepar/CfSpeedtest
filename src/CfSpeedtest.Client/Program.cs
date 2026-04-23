@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Net.WebSockets;
@@ -55,15 +56,10 @@ Console.WriteLine($"Default interval: {intervalMinutes}min");
 Console.WriteLine();
 runtimeState.AppendLog($"Server={serverUrl}, ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}, Version={currentVersion}, Platform={clientPlatform}");
 
-var stateFile = Path.Combine(AppContext.BaseDirectory, "client-state.json");
-var localState = LoadClientState(stateFile);
-if (!string.IsNullOrWhiteSpace(explicitClientId))
+var currentClientId = string.IsNullOrWhiteSpace(explicitClientId) ? string.Empty : explicitClientId.Trim();
+if (!string.IsNullOrWhiteSpace(currentClientId))
 {
-    localState.ClientId = explicitClientId.Trim();
-}
-if (!string.IsNullOrWhiteSpace(localState.ClientId))
-{
-    Console.WriteLine($"Local clientId: {localState.ClientId}");
+    Console.WriteLine($"ClientId: {currentClientId}");
 }
 
 const int StartupRetryDelaySeconds = 5;
@@ -87,7 +83,7 @@ while (true)
     {
         var regReq = new ClientRegisterRequest
         {
-            ClientId = localState.ClientId,
+            ClientId = currentClientId,
             Isp = runtimeProfile.Isp,
             Name = runtimeProfile.Name,
             Version = currentVersion,
@@ -112,9 +108,8 @@ while (true)
         heartbeatIntervalSeconds = regResult.Data.HeartbeatIntervalSeconds > 0
             ? regResult.Data.HeartbeatIntervalSeconds
             : heartbeatIntervalSeconds;
-        ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName, regResult.Data.EffectiveProxyMode, regResult.Data.EffectiveProxyUrl);
-        localState.ClientId = clientId;
-        SaveClientState(stateFile, localState);
+        currentClientId = clientId;
+        ApplyAuthoritativeClientMetadata(serverUrl, currentClientId, isService, runtimeProfile, proxySettings, transportState, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName, regResult.Data.EffectiveProxyMode, regResult.Data.EffectiveProxyUrl);
         Console.WriteLine($"Registered as: {clientId}");
         runtimeState.AppendLog($"Registered as {clientId}");
         break;
@@ -130,7 +125,7 @@ while (true)
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, transportState.HttpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -374,18 +369,31 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         if (isService)
         {
             Console.WriteLine("Update installed. Please restart the service or service manager to load the new version.");
+            Environment.Exit(0);
         }
         else
         {
-            Console.WriteLine("Update installed. Please start the client again to continue.");
+            Console.WriteLine("Update installed. Restarting client process...");
+            RestartCurrentProcess(currentExe, Environment.GetCommandLineArgs().Skip(1).Where(a => !string.Equals(a, "--apply-update", StringComparison.OrdinalIgnoreCase)).ToArray());
         }
-
-        Environment.Exit(0);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"Update check failed: {ex.Message}");
     }
+}
+
+static void RestartCurrentProcess(string currentExe, IReadOnlyList<string> args)
+{
+    Process.Start(new ProcessStartInfo
+    {
+        FileName = currentExe,
+        Arguments = string.Join(" ", args.Select(QuoteArg)),
+        UseShellExecute = false,
+        WorkingDirectory = Path.GetDirectoryName(currentExe) ?? AppContext.BaseDirectory,
+    });
+
+    Environment.Exit(0);
 }
 
 static string DetectClientPlatform()
@@ -469,6 +477,7 @@ static Task StartHeartbeatLoopAsync(
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
+    bool isService,
     HttpClient httpClient,
     int heartbeatIntervalSeconds,
     SemaphoreSlim immediateFetchSignal,
@@ -488,7 +497,7 @@ static Task StartHeartbeatLoopAsync(
 
             if (!inFallbackWindow)
             {
-                var wsResult = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, immediateFetchSignal, cancellationToken);
+            var wsResult = await TryStartWebSocketHeartbeatAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, isService, immediateFetchSignal, cancellationToken);
                 if (wsResult == 1)
                 {
                     wsEverConnected = true;
@@ -536,7 +545,7 @@ static Task StartHeartbeatLoopAsync(
                 var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
-                    ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, result.Data.EffectiveIsp, result.Data.EffectiveName, result.Data.EffectiveProxyMode, result.Data.EffectiveProxyUrl);
+                    ApplyAuthoritativeClientMetadata(serverUrl, clientId, isService, runtimeProfile, proxySettings, transportState, result.Data.EffectiveIsp, result.Data.EffectiveName, result.Data.EffectiveProxyMode, result.Data.EffectiveProxyUrl);
                     if (result.Data.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
                     {
                         immediateFetchSignal.Release();
@@ -544,7 +553,7 @@ static Task StartHeartbeatLoopAsync(
                     if (result.Data.ForceCheckUpdate)
                     {
                         Console.WriteLine("Manual update trigger received. Checking update immediately...");
-                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, transportState.HttpClient);
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
                     }
 
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
@@ -579,6 +588,7 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
     string currentVersion,
     string clientPlatform,
     bool autoUpdate,
+    bool isService,
     SemaphoreSlim immediateFetchSignal,
     CancellationToken cancellationToken)
 {
@@ -596,22 +606,20 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
             var receiveBuffer = new byte[8192];
             while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
             {
-                var result = await ws.ReceiveAsync(receiveBuffer, cancellationToken);
-                if (result.MessageType == WebSocketMessageType.Close)
+                var body = await ReceiveWebSocketTextMessageAsync(ws, receiveBuffer, cancellationToken);
+                if (body is null)
                     break;
-
-                var body = Encoding.UTF8.GetString(receiveBuffer, 0, result.Count);
                 var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
                 if (msg is not null)
                 {
-                    ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, msg.EffectiveIsp, msg.EffectiveName, msg.EffectiveProxyMode, msg.EffectiveProxyUrl);
+                    ApplyAuthoritativeClientMetadata(serverUrl, clientId, isService, runtimeProfile, proxySettings, transportState, msg.EffectiveIsp, msg.EffectiveName, msg.EffectiveProxyMode, msg.EffectiveProxyUrl);
                     intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
                     if ((msg.ForceFetchTask || string.Equals(msg.Type, "trigger-test", StringComparison.OrdinalIgnoreCase)) && immediateFetchSignal.CurrentCount == 0)
                         immediateFetchSignal.Release();
                     if (msg.ForceCheckUpdate)
                     {
                         Console.WriteLine("Manual update trigger received via WebSocket. Checking update immediately...");
-                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, false, transportState.HttpClient);
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
                     }
                 }
             }
@@ -659,7 +667,7 @@ static string BuildWebSocketUrl(string serverUrl, string clientId, IspType isp)
     return $"{scheme}://{baseUri.Authority}/api/client/ws?clientId={Uri.EscapeDataString(clientId)}&isp={Uri.EscapeDataString(isp.ToString())}";
 }
 
-static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile, ClientProxySettings proxySettings, ClientTransportState transportState, IspType effectiveIsp, string? effectiveName, string? effectiveProxyMode, string? effectiveProxyUrl)
+static void ApplyAuthoritativeClientMetadata(string serverUrl, string clientId, bool isService, ClientRuntimeProfile runtimeProfile, ClientProxySettings proxySettings, ClientTransportState transportState, IspType effectiveIsp, string? effectiveName, string? effectiveProxyMode, string? effectiveProxyUrl)
 {
     var metadataChanged = false;
     if (!string.IsNullOrWhiteSpace(effectiveName))
@@ -668,6 +676,10 @@ static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile
         if (metadataChanged)
         {
             Console.WriteLine($"Server metadata updated: ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}");
+            if (isService && !string.IsNullOrWhiteSpace(clientId))
+            {
+                TryUpdateServiceArguments(serverUrl, clientId, runtimeProfile.Isp, runtimeProfile.Name);
+            }
         }
     }
 
@@ -891,30 +903,124 @@ static string NormalizeArgKey(string value)
     return value.Trim().TrimStart('-').TrimStart('-');
 }
 
-static ClientLocalState LoadClientState(string path)
+static string QuoteArg(string value)
 {
-    try
-    {
-        if (!File.Exists(path)) return new ClientLocalState();
-        var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize(json, AppJsonContext.Default.ClientLocalState) ?? new ClientLocalState();
-    }
-    catch
-    {
-        return new ClientLocalState();
-    }
+    if (string.IsNullOrEmpty(value)) return "\"\"";
+    if (!value.Any(char.IsWhiteSpace) && !value.Contains('"')) return value;
+    return "\"" + value.Replace("\"", "\\\"") + "\"";
 }
 
-static void SaveClientState(string path, ClientLocalState state)
+static void TryUpdateServiceArguments(string serverUrl, string clientId, IspType isp, string clientName)
 {
     try
     {
-        var json = JsonSerializer.Serialize(state, AppJsonContext.Default.ClientLocalState);
-        File.WriteAllText(path, json);
+        if (OperatingSystem.IsWindows())
+        {
+            var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CfSpeedtestClient");
+            var nssmExe = Path.Combine(installDir, "nssm", "nssm.exe");
+            var exePath = Path.Combine(installDir, "CfSpeedtest.Client.exe");
+            if (File.Exists(nssmExe) && File.Exists(exePath))
+            {
+                var args = $"--server \"{serverUrl}\" --client-id {clientId} --isp {isp} --name \"{clientName}\" --service";
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = nssmExe,
+                    Arguments = $"set CfSpeedtestClient Application {exePath}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                })?.WaitForExit();
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = nssmExe,
+                    Arguments = $"set CfSpeedtestClient AppParameters {args}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                })?.WaitForExit();
+            }
+            return;
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            var serviceName = "cfspeedtest-client";
+            var serviceFile = $"/etc/systemd/system/{serviceName}.service";
+            var openRcFile = $"/etc/init.d/{serviceName}";
+            var installDir = "/opt/cfspeedtest-client";
+            var execLine = $"ExecStart={installDir}/CfSpeedtest.Client --server {serverUrl} --client-id {clientId} --isp {isp} --name \"{clientName}\" --service";
+
+            if (File.Exists(serviceFile))
+            {
+                var lines = File.ReadAllLines(serviceFile)
+                    .Select(line => line.StartsWith("ExecStart=") ? execLine : line)
+                    .ToArray();
+                File.WriteAllLines(serviceFile, lines);
+                Process.Start("systemctl", "daemon-reload")?.WaitForExit();
+                return;
+            }
+
+            if (File.Exists(openRcFile))
+            {
+                var content = File.ReadAllText(openRcFile);
+                if (content.Contains("procd_set_param command "))
+                {
+                    var procdLines = File.ReadAllLines(openRcFile)
+                        .Select(line => line.Contains("procd_set_param command ")
+                            ? $"  procd_set_param command {installDir}/CfSpeedtest.Client --server {serverUrl} --client-id {clientId} --isp {isp} --name {clientName} --service"
+                            : line)
+                        .ToArray();
+                    File.WriteAllLines(openRcFile, procdLines);
+                    return;
+                }
+
+                var lines = File.ReadAllLines(openRcFile)
+                    .Select(line => line.StartsWith("command_args=")
+                        ? $"command_args=\"--server {serverUrl} --client-id {clientId} --isp {isp} --name {clientName} --service\""
+                        : line)
+                    .ToArray();
+                File.WriteAllLines(openRcFile, lines);
+                return;
+            }
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            var plistName = "uk.greepar.cfspeedtest.client";
+            var plistPath = $"/Library/LaunchDaemons/{plistName}.plist";
+            var installDir = "/usr/local/cfspeedtest-client";
+            if (File.Exists(plistPath))
+            {
+                var args = new[]
+                {
+                    $"    <string>{installDir}/CfSpeedtest.Client</string>",
+                    "    <string>--server</string>",
+                    $"    <string>{serverUrl}</string>",
+                    "    <string>--client-id</string>",
+                    $"    <string>{clientId}</string>",
+                    "    <string>--isp</string>",
+                    $"    <string>{isp}</string>",
+                    "    <string>--name</string>",
+                    $"    <string>{clientName}</string>",
+                    "    <string>--service</string>"
+                };
+                var lines = File.ReadAllLines(plistPath).ToList();
+                var start = lines.FindIndex(l => l.Contains("<key>ProgramArguments</key>"));
+                if (start >= 0)
+                {
+                    var arrayStart = start + 2;
+                    var arrayEnd = lines.FindIndex(arrayStart, l => l.Contains("</array>"));
+                    if (arrayEnd > arrayStart)
+                    {
+                        lines.RemoveRange(arrayStart, arrayEnd - arrayStart);
+                        lines.InsertRange(arrayStart, args);
+                        File.WriteAllLines(plistPath, lines);
+                    }
+                }
+            }
+        }
     }
     catch
     {
-        // 忽略本地持久化失败
+        // ignore service config update failures
     }
 }
 
@@ -923,6 +1029,7 @@ static void CleanupOldFiles()
     try
     {
         var baseDir = AppContext.BaseDirectory;
+        TryDeleteFile(Path.Combine(baseDir, "client-state.json"));
         foreach (var file in Directory.GetFiles(baseDir, "*.bak", SearchOption.TopDirectoryOnly))
         {
             TryDeleteFile(file);
@@ -985,6 +1092,23 @@ static void TryDeleteFile(string? path)
     catch { }
 }
 
+static async Task<string?> ReceiveWebSocketTextMessageAsync(WebSocket ws, byte[] buffer, CancellationToken cancellationToken)
+{
+    using var ms = new MemoryStream();
+    while (true)
+    {
+        var result = await ws.ReceiveAsync(buffer, cancellationToken);
+        if (result.MessageType == WebSocketMessageType.Close)
+            return null;
+
+        ms.Write(buffer, 0, result.Count);
+        if (result.EndOfMessage)
+            break;
+    }
+
+    return Encoding.UTF8.GetString(ms.ToArray());
+}
+
 sealed class ClientRuntimeProfile
 {
     private readonly Lock _lock = new();
@@ -1042,7 +1166,8 @@ sealed class ClientRuntimeState
     private int _testedIps;
     private DateTime? _startedAt;
     private readonly Queue<string> _logLines = new();
-    private const int MaxLogLines = 200;
+    private const int MaxLogLines = 80;
+    private const int MaxLogChars = 4000;
 
     public string Status
     {
@@ -1066,7 +1191,15 @@ sealed class ClientRuntimeState
 
     public string LogText
     {
-        get { lock (_lock) return string.Join("\n", _logLines); }
+        get
+        {
+            lock (_lock)
+            {
+                var text = string.Join("\n", _logLines);
+                if (text.Length <= MaxLogChars) return text;
+                return text[^MaxLogChars..];
+            }
+        }
     }
 
     public void SetWaiting()
