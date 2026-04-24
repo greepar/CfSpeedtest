@@ -427,7 +427,7 @@ public class RoundCoordinatorService : BackgroundService
     private static TimeSpan GetFinalizeGracePeriod(ServerConfig config)
     {
         var perIpSeconds = Math.Max(1, config.TcpTestDurationSeconds) + Math.Max(1, config.DownloadDurationSeconds);
-        var estimatedBatchSeconds = Math.Max(1, config.BatchSize) * perIpSeconds;
+        var estimatedBatchSeconds = Math.Max(1, Math.Max(config.BatchSize, config.MaxTestIpCount)) * perIpSeconds;
         return TimeSpan.FromSeconds(estimatedBatchSeconds + 60);
     }
 

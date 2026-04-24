@@ -203,15 +203,22 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     var allResults = new List<IpTestResult>();
     var testedIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var pendingIps = new Queue<string>(task.IpAddresses);
-    runtimeState.SetTesting(task.IpAddresses.Count, 0);
+    var maxTestIpCount = Math.Max(task.IpAddresses.Count, task.MaxTestIpCount);
+    runtimeState.SetTesting(maxTestIpCount, 0);
 
     while (pendingIps.Count > 0)
     {
+        if (testedIps.Count >= maxTestIpCount)
+        {
+            runtimeState.AppendLog($"Reached max test IP count limit: {maxTestIpCount}");
+            break;
+        }
+
         var ip = pendingIps.Dequeue();
         if (!testedIps.Add(ip))
             continue;
 
-        runtimeState.SetTesting(task.IpAddresses.Count, testedIps.Count - 1);
+        runtimeState.SetTesting(maxTestIpCount, testedIps.Count - 1);
 
         Console.Write($"  [{testedIps.Count}] {ip,-16} ");
         runtimeState.AppendLog($"[{testedIps.Count}] Testing {ip}");
@@ -245,13 +252,13 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         Console.WriteLine($"Score: {result.Score:F1}");
         runtimeState.AppendLog($"{ip} TCP={result.AvgLatencyMs:F1}ms loss={result.PacketLossRate:P1} DL={result.DownloadSpeedKBps:F1}KB/s Score={result.Score:F1}");
         allResults.Add(result);
-        runtimeState.SetTesting(task.IpAddresses.Count, testedIps.Count);
+        runtimeState.SetTesting(maxTestIpCount, testedIps.Count);
 
         var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
         if (qualifiedCount >= task.TopN)
             continue;
 
-        if (pendingIps.Count == 0)
+        if (pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
         {
             var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, transportState.HttpClient);
             runtimeState.AppendLog($"Requested additional IP batch, received {additionalIps.Count} IP(s)");

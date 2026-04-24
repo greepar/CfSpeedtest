@@ -259,6 +259,31 @@ public class DataStore
         return count;
     }
 
+    public bool RemoveHistory(string historyId)
+    {
+        lock (_lock)
+        {
+            var kept = _history
+                .Where(h => !string.Equals(h.Id, historyId, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(h => h.CompletedAt)
+                .ToList();
+
+            if (kept.Count == _history.Count)
+            {
+                return false;
+            }
+
+            _history.Clear();
+            foreach (var item in kept)
+            {
+                _history.Add(item);
+            }
+
+            PersistFile("history.json", kept);
+            return true;
+        }
+    }
+
     // ===== Persistence =====
     private void PersistFile<T>(string filename, T data)
     {

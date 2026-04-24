@@ -42,6 +42,9 @@ public class SpeedTestTask
     /// <summary>返回前N个最优结果</summary>
     public int TopN { get; set; } = 5;
 
+    /// <summary>单轮测速最多测试多少个 IP（达到该数量后停止补拉）</summary>
+    public int MaxTestIpCount { get; set; } = 40;
+
     /// <summary>最低下载速度阈值(KB/s)，低于该值不计入最终上传和DNS候选</summary>
     public double MinDownloadSpeedKBps { get; set; }
 
@@ -263,7 +266,21 @@ public class ClientInstallScriptResponse
     public string ScriptType { get; set; } = string.Empty;
     public string ServiceKind { get; set; } = string.Empty;
     public string ScriptFileName { get; set; } = string.Empty;
+    public string ScriptSource { get; set; } = string.Empty;
+    public string ScriptUrl { get; set; } = string.Empty;
     public string Script { get; set; } = string.Empty;
+}
+
+public class ClientInstallScriptRequest
+{
+    public string Platform { get; set; } = string.Empty;
+    public string ScriptType { get; set; } = string.Empty;
+    public string ServerUrl { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public string Isp { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IncludeProxy { get; set; } = true;
+    public bool DisableAutoUpdate { get; set; }
 }
 
 public class WebUiAuthConfig
@@ -458,6 +475,9 @@ public class ServerConfig
 
     /// <summary>返回前N个最优IP</summary>
     public int TopN { get; set; } = 5;
+
+    /// <summary>单轮测速最多测试多少个 IP（达到该数量后停止补拉）</summary>
+    public int MaxTestIpCount { get; set; } = 40;
 
     /// <summary>客户端轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;

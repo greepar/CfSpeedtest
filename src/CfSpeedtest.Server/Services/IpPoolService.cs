@@ -77,8 +77,8 @@ public class IpPoolService : BackgroundService
                         var manualIps = sourceConfig.ManualIps ?? [];
                         var existingApiIps = _store.GetApiIpPool(isp);
                         var existingAll = manualIps.Concat(existingApiIps).ToHashSet();
-                        // Keep at least two full batches so clients can request a second batch of different IPs.
-                        var targetPoolSize = Math.Max(config.BatchSize * 2, config.TopN);
+                        // Keep enough IPs for the initial batch plus fallback pulls up to the configured max test count.
+                        var targetPoolSize = Math.Max(Math.Max(config.BatchSize * 2, config.MaxTestIpCount), config.TopN);
                         var needCount = Math.Max(0, targetPoolSize - existingAll.Count);
                         var refillIps = ips.Where(ip => !existingAll.Contains(ip)).Take(needCount).ToList();
 

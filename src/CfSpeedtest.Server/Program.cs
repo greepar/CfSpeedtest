@@ -423,6 +423,23 @@ app.MapGet("/api/client/update/overview", (DataStore store) =>
     });
 });
 
+app.MapPost("/api/client/install-script", (ClientInstallScriptRequest req, DataStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Platform))
+        return ApiResponse<ClientInstallScriptResponse>.Fail("Platform is required");
+
+    var scriptType = string.IsNullOrWhiteSpace(req.ScriptType) ? "install" : req.ScriptType.Trim().ToLowerInvariant();
+    var platform = req.Platform.Trim().ToLowerInvariant();
+
+    if (platform != "linux" && platform != "windows" && platform != "macos")
+        return ApiResponse<ClientInstallScriptResponse>.Fail("Unsupported platform");
+
+    var response = BuildClientCommandResponse(req, store.GetConfig(), platform, scriptType);
+    return response is null
+        ? ApiResponse<ClientInstallScriptResponse>.Fail("无法生成命令，请先检查更新源配置")
+        : ApiResponse<ClientInstallScriptResponse>.Ok(response);
+});
+
 app.MapGet("/api/auth/status", (HttpContext http, DataStore store, WebUiAuthService auth) =>
 {
     var ok = auth.TryAuthenticate(http, store, out var username);
@@ -589,6 +606,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         DownloadDurationSeconds = config.DownloadDurationSeconds,
         TcpTestDurationSeconds = config.TcpTestDurationSeconds,
         TopN = config.TopN,
+        MaxTestIpCount = config.MaxTestIpCount,
         MinDownloadSpeedKBps = config.MinDownloadSpeedKBps,
         MaxDownloadSpeedKBps = config.MaxDownloadSpeedKBps,
         ClientIntervalMinutes = config.ClientIntervalMinutes,
@@ -772,6 +790,18 @@ app.MapPost("/api/history/clear", (DataStore store) =>
     return ApiResponse<string>.Ok($"已清空 {removed} 条测速记录");
 });
 
+app.MapDelete("/api/history/{historyId}", (string historyId, DataStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(historyId))
+    {
+        return ApiResponse<string>.Fail("HistoryId is required");
+    }
+
+    return store.RemoveHistory(historyId)
+        ? ApiResponse<string>.Ok("测速记录已删除")
+        : ApiResponse<string>.Fail("测速记录不存在");
+});
+
 // ============================================================
 //  API: WebUI - 获取所有运营商的IP池聚合数据
 // ============================================================
@@ -909,6 +939,192 @@ app.MapPost("/api/dns/test-record", async (DnsUpdateTriggerRequest? req, DnsUpda
 });
 
 app.Run();
+
+static ClientInstallScriptResponse? BuildClientCommandResponse(ClientInstallScriptRequest req, ServerConfig config, string platform, string scriptType)
+{
+    var normalizedServerUrl = (string.IsNullOrWhiteSpace(req.ServerUrl) ? string.Empty : req.ServerUrl.Trim()).TrimEnd('/');
+    var normalizedClientId = string.IsNullOrWhiteSpace(req.ClientId) ? "CHANGE_ME_CLIENT_ID" : req.ClientId.Trim();
+    var normalizedIsp = string.IsNullOrWhiteSpace(req.Isp) ? "Telecom" : req.Isp.Trim();
+    var normalizedName = string.IsNullOrWhiteSpace(req.Name) ? $"{normalizedIsp}-{normalizedClientId[..Math.Min(8, normalizedClientId.Length)]}" : req.Name.Trim();
+
+    if (scriptType == "manual")
+    {
+        return new ClientInstallScriptResponse
+        {
+            Platform = platform,
+            ScriptType = scriptType,
+            ServiceKind = "manual",
+            ScriptFileName = "CfSpeedtest.Client.exe",
+            ScriptSource = "manual",
+            Script = BuildManualClientCommand(normalizedServerUrl, normalizedClientId, normalizedIsp, normalizedName, req.DisableAutoUpdate),
+        };
+    }
+
+    if (scriptType == "uninstall")
+    {
+        return new ClientInstallScriptResponse
+        {
+            Platform = platform,
+            ScriptType = scriptType,
+            ServiceKind = platform == "windows" ? "windows-service" : (platform == "macos" ? "launchd" : "auto-detect"),
+            ScriptFileName = platform == "windows" ? "remove-cfspeedtest-client.ps1" : "remove-cfspeedtest-client.sh",
+            ScriptSource = "generated",
+            Script = BuildUninstallCommand(platform),
+        };
+    }
+
+    var scriptInfo = BuildInstallScriptInfo(config, platform, req.IncludeProxy);
+    if (scriptInfo is null)
+    {
+        return null;
+    }
+    var info = scriptInfo.Value;
+
+    return new ClientInstallScriptResponse
+    {
+        Platform = platform,
+        ScriptType = scriptType,
+        ServiceKind = info.ServiceKind,
+        ScriptFileName = info.FileName,
+        ScriptSource = info.Source,
+        ScriptUrl = info.Url,
+        Script = BuildInstallCommand(platform, info.Url, config, normalizedServerUrl, normalizedClientId, normalizedIsp, normalizedName, req.IncludeProxy),
+    };
+}
+
+static string BuildManualClientCommand(string serverUrl, string clientId, string isp, string name, bool disableAutoUpdate)
+{
+    var command = $"CfSpeedtest.Client.exe --server {serverUrl} --client-id {clientId} --isp {isp}";
+    if (!string.IsNullOrWhiteSpace(name))
+    {
+        command += $" --name {name}";
+    }
+    if (disableAutoUpdate)
+    {
+        command += " --disable-auto-update";
+    }
+    return command;
+}
+
+static string BuildInstallCommand(string platform, string scriptUrl, ServerConfig config, string serverUrl, string clientId, string isp, string name, bool includeProxy)
+{
+    if (platform == "windows")
+    {
+        var args = new List<string>
+        {
+            "-ServerUrl " + PsSingleQuote(serverUrl),
+            "-ClientId " + PsSingleQuote(clientId),
+            "-Isp " + PsSingleQuote(isp),
+            "-ClientName " + PsSingleQuote(name),
+            "-Repository " + PsSingleQuote(config.ClientUpdateRepository.Trim()),
+            "-ReleaseTag " + PsSingleQuote(config.ClientUpdateReleaseTag.Trim())
+        };
+
+        if (includeProxy && !string.IsNullOrWhiteSpace(config.ClientUpdateGhProxyPrefix))
+        {
+            args.Add("-GhProxyPrefix " + PsSingleQuote(config.ClientUpdateGhProxyPrefix.Trim()));
+        }
+
+        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& { " +
+               "$tmp = Join-Path $env:TEMP " + PsSingleQuote("install-cfspeedtest-client.ps1") + "; " +
+               "irm " + PsSingleQuote(scriptUrl) + " -OutFile $tmp; " +
+               "& powershell -ExecutionPolicy Bypass -File $tmp " + string.Join(" ", args) +
+               " }\"";
+    }
+
+    var suffix = new List<string>
+    {
+        "--server " + ShellQuote(serverUrl),
+        "--client-id " + ShellQuote(clientId),
+        "--isp " + ShellQuote(isp),
+        "--name " + ShellQuote(name),
+        "--repository " + ShellQuote(config.ClientUpdateRepository.Trim()),
+        "--release-tag " + ShellQuote(config.ClientUpdateReleaseTag.Trim())
+    };
+
+    if (includeProxy && !string.IsNullOrWhiteSpace(config.ClientUpdateGhProxyPrefix))
+    {
+        suffix.Add("--gh-proxy-prefix " + ShellQuote(config.ClientUpdateGhProxyPrefix.Trim()));
+    }
+
+    return "wget -qO- \"" + scriptUrl + "\" | sudo bash -s -- " + string.Join(" ", suffix);
+}
+
+static string BuildUninstallCommand(string platform)
+{
+    if (platform == "windows")
+    {
+        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"" +
+               "$serviceName='CfSpeedtestClient';" +
+               "$installDir=Join-Path $env:ProgramFiles 'CfSpeedtestClient';" +
+               "$nssmExe=Join-Path $installDir 'nssm\\nssm.exe';" +
+               "if (Test-Path $nssmExe) { & $nssmExe stop $serviceName | Out-Null; & $nssmExe remove $serviceName confirm | Out-Null };" +
+               "if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }" +
+               "\"";
+    }
+
+    if (platform == "macos")
+    {
+        return "sudo launchctl bootout system /Library/LaunchDaemons/com.cfspeedtest.client.plist 2>/dev/null; " +
+               "sudo rm -f /Library/LaunchDaemons/com.cfspeedtest.client.plist; " +
+               "sudo rm -rf /opt/cfspeedtest-client";
+    }
+
+    return "sudo sh -c " + ShellQuote(
+        "SERVICE_NAME=\"cfspeedtest-client\"; " +
+        "if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then " +
+            "systemctl stop \"$SERVICE_NAME\" 2>/dev/null || true; " +
+            "systemctl disable \"$SERVICE_NAME\" 2>/dev/null || true; " +
+            "rm -f \"/etc/systemd/system/${SERVICE_NAME}.service\"; " +
+            "systemctl daemon-reload; " +
+        "elif [ -f /etc/openwrt_release ] || [ -f /etc/rc.common ]; then " +
+            "if [ -x \"/etc/init.d/${SERVICE_NAME}\" ]; then \"/etc/init.d/${SERVICE_NAME}\" stop 2>/dev/null || true; \"/etc/init.d/${SERVICE_NAME}\" disable 2>/dev/null || true; rm -f \"/etc/init.d/${SERVICE_NAME}\"; fi; " +
+        "elif command -v rc-service >/dev/null 2>&1 || [ -x /sbin/openrc-run ]; then " +
+            "rc-service \"$SERVICE_NAME\" stop 2>/dev/null || true; " +
+            "rc-update del \"$SERVICE_NAME\" default 2>/dev/null || true; " +
+            "rm -f \"/etc/init.d/${SERVICE_NAME}\"; " +
+        "fi; " +
+        "rm -rf /opt/cfspeedtest-client"
+    );
+}
+
+static (string FileName, string Url, string Source, string ServiceKind)? BuildInstallScriptInfo(ServerConfig config, string platform, bool includeProxy)
+{
+    var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
+    var fileName = platform == "windows"
+        ? "install-cfspeedtest-client-windows.ps1"
+        : (platform == "macos" ? "install-cfspeedtest-client-macos.sh" : "install-cfspeedtest-client-linux.sh");
+    var serviceKind = platform == "windows" ? "windows-service" : (platform == "macos" ? "launchd" : "auto-detect");
+
+    if (sourceType != "github")
+    {
+        return null;
+    }
+
+    var repository = config.ClientUpdateRepository.Trim();
+    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    {
+        return null;
+    }
+
+    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
+    var url = includeProxy && !string.IsNullOrWhiteSpace(config.ClientUpdateGhProxyPrefix)
+        ? CombineProxyUrl(config.ClientUpdateGhProxyPrefix.Trim(), rawUrl)
+        : rawUrl;
+
+    return (fileName, url, "GitHub Release", serviceKind);
+}
+
+static string ShellQuote(string value)
+{
+    return "'" + (value ?? string.Empty).Replace("'", "'\"'\"'") + "'";
+}
+
+static string PsSingleQuote(string value)
+{
+    return "'" + (value ?? string.Empty).Replace("'", "''") + "'";
+}
 
 static bool IsVersionNewer(string latestVersion, string currentVersion)
 {

@@ -769,9 +769,16 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                     <input id="cfg-topn" type="number" />
                 </div>
                 <div class="form-group">
+                    <label>单轮最多测速 IP 数</label>
+                    <input id="cfg-max-test-ip-count" type="number" min="1" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
                     <label>客户端轮询间隔 (分钟)</label>
                     <input id="cfg-client-interval" type="number" />
                 </div>
+                <div class="form-group"></div>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -1326,11 +1333,13 @@ function loadHistory() {
         }
         var html = '';
         data.forEach(function(h) {
+            var recordLabel = (ISP_NAMES[h.isp] || h.isp) + ' / ' + fmtTime(h.completedAt) + ' / 客户端 ' + h.clientId.substring(0,8);
             html += '<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);">' +
-                '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;">' +
+                '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">' +
                 '<span class="badge ' + (ISP_CLASSES[h.isp] || '') + '">' + (ISP_NAMES[h.isp] || h.isp) + '</span>' +
                 '<span style="color:var(--text2);font-size:13px;">' + fmtTime(h.completedAt) + '</span>' +
                 '<span style="color:var(--text2);font-size:12px;">客户端: ' + h.clientId.substring(0,8) + '</span>' +
+                '<button class="btn danger-btn" type="button" style="margin-left:auto;" onclick="deleteHistoryRecord(\'' + String(h.id || '').replace(/'/g, "\\'") + '\', \'' + recordLabel.replace(/'/g, "\\'") + '\')">删除此条</button>' +
                 '</div>' +
                 '<table><thead><tr><th>排名</th><th>IP</th><th>下载速度</th><th>平均延迟</th><th>最低延迟</th><th>丢包率</th><th>评分</th></tr></thead><tbody>';
             var results = h.results || [];
@@ -1376,6 +1385,25 @@ function clearHistory() {
         }
     }).catch(function(err) {
         toast('清空失败: ' + err.message, false);
+    });
+}
+
+function deleteHistoryRecord(historyId, label) {
+    if (!historyId) {
+        toast('记录 ID 无效', false);
+        return;
+    }
+    if (!confirm('确认删除这条测速记录吗？\n' + label + '\n此操作不可恢复。')) return;
+    api('/api/history/' + encodeURIComponent(historyId), 'DELETE').then(function(r) {
+        if (r.success) {
+            toast(r.data || r.message || '测速记录已删除');
+            loadHistory();
+            loadDashboard();
+        } else {
+            toast(r.message || '删除失败', false);
+        }
+    }).catch(function(err) {
+        toast('删除失败: ' + err.message, false);
     });
 }
 
@@ -1484,63 +1512,18 @@ function buildInstallScriptParams() {
     };
 }
 
-function buildInstallScriptUrl(params) {
-    if (!serverConfigData) return '';
-    var repo = (serverConfigData.clientUpdateRepository || '').trim();
-    var tag = (serverConfigData.clientUpdateReleaseTag || '').trim();
-    if (!repo || !tag) return '';
-
-    var fileName = currentInstallScriptPlatform === 'windows'
-        ? 'install-cfspeedtest-client-windows.ps1'
-        : (currentInstallScriptPlatform === 'macos' ? 'install-cfspeedtest-client-macos.sh' : 'install-cfspeedtest-client-linux.sh');
-
-    var rawUrl = 'https://github.com/' + repo + '/releases/download/' + tag + '/' + fileName;
-    var proxy = (serverConfigData.clientUpdateGhProxyPrefix || '').trim();
-    return proxy ? proxy.replace(/\/$/, '') + '/' + rawUrl : rawUrl;
-}
-
-function buildInstallOneLiner(url, params) {
-    if (!url) return '';
-
-    if (currentInstallScriptPlatform === 'windows') {
-        var psArgs = [];
-        psArgs.push('-ServerUrl ' + psSingleQuote(params.serverUrl));
-        psArgs.push('-ClientId ' + psSingleQuote(params.clientId));
-        psArgs.push('-Isp ' + psSingleQuote(params.isp));
-        psArgs.push('-ClientName ' + psSingleQuote(params.name));
-        psArgs.push('-Repository ' + psSingleQuote((serverConfigData.clientUpdateRepository || '').trim()));
-        psArgs.push('-ReleaseTag ' + psSingleQuote((serverConfigData.clientUpdateReleaseTag || '').trim()));
-        if (document.getElementById('client-option-show-proxy').checked && (serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
-            psArgs.push('-GhProxyPrefix ' + psSingleQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
-        }
-
-        return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "& { ' +
-            '$tmp = Join-Path $env:TEMP ' + psSingleQuote('install-cfspeedtest-client.ps1') + '; ' +
-            'irm ' + psSingleQuote(url) + ' -OutFile $tmp; ' +
-            '& powershell -ExecutionPolicy Bypass -File $tmp ' + psArgs.join(' ') +
-            ' }"';
-    }
-
-    var suffix = [];
-    suffix.push('--server ' + shellQuote(params.serverUrl));
-    suffix.push('--client-id ' + shellQuote(params.clientId));
-    suffix.push('--isp ' + shellQuote(params.isp));
-    suffix.push('--name ' + shellQuote(params.name));
-    suffix.push('--repository ' + shellQuote((serverConfigData.clientUpdateRepository || '').trim()));
-    suffix.push('--release-tag ' + shellQuote((serverConfigData.clientUpdateReleaseTag || '').trim()));
-    if (document.getElementById('client-option-show-proxy').checked && (serverConfigData.clientUpdateGhProxyPrefix || '').trim()) {
-        suffix.push('--gh-proxy-prefix ' + shellQuote((serverConfigData.clientUpdateGhProxyPrefix || '').trim()));
-    }
-
-    return 'wget -qO- "' + url + '" | sudo bash -s -- ' + suffix.join(' ');
-}
-
-function shellQuote(value) {
-    return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
-}
-
-function psSingleQuote(value) {
-    return "'" + String(value || '').replace(/'/g, "''") + "'";
+function requestClientScript(scriptType) {
+    var params = buildInstallScriptParams();
+    return api('/api/client/install-script', 'POST', {
+        platform: params.platform,
+        scriptType: scriptType,
+        serverUrl: params.serverUrl,
+        clientId: params.clientId,
+        isp: params.isp,
+        name: params.name,
+        includeProxy: !!document.getElementById('client-option-show-proxy').checked,
+        disableAutoUpdate: !!document.getElementById('client-option-disable-auto-update').checked
+    });
 }
 
 function refreshInstallScript() {
@@ -1549,79 +1532,33 @@ function refreshInstallScript() {
     if (!metaEl || !oneLinerEl) return;
 
     var params = buildInstallScriptParams();
-    var scriptUrl = buildInstallScriptUrl(params);
-    var oneLiner = buildInstallOneLiner(scriptUrl, params);
     metaEl.textContent = '正在生成 ' + params.platform + ' 一键安装命令...';
-    oneLinerEl.textContent = oneLiner;
-    oneLinerEl.dataset.command = oneLiner;
+    oneLinerEl.textContent = '';
+    oneLinerEl.dataset.command = '';
+    requestClientScript('install').then(function(r) {
+        if (!r.success || !r.data) {
+            metaEl.textContent = r.message || '请先在配置页填写 GitHub 仓库和 Release Tag';
+            return;
+        }
 
-    if (!scriptUrl) {
-        metaEl.textContent = '请先在配置页填写 GitHub 仓库和 Release Tag';
-        oneLinerEl.textContent = '';
-        oneLinerEl.dataset.command = '';
-        return;
-    }
-
-    var serviceKind = currentInstallScriptPlatform === 'windows' ? 'scheduled-task' : (currentInstallScriptPlatform === 'macos' ? 'launchd' : 'auto-detect');
-    var fileName = currentInstallScriptPlatform === 'windows'
-        ? 'install-cfspeedtest-client-windows.ps1'
-        : (currentInstallScriptPlatform === 'macos' ? 'install-cfspeedtest-client-macos.sh' : 'install-cfspeedtest-client-linux.sh');
-
-    metaEl.innerHTML =
-        '脚本来源: <span style="font-family:monospace;">GitHub Release</span> &nbsp; ' +
-        '服务托管: <span style="font-family:monospace;">' + serviceKind + '</span> &nbsp; ' +
-        '文件名: <span style="font-family:monospace;">' + fileName + '</span> &nbsp; ' +
-        '脚本地址: <span style="font-family:monospace;">' + escapeHtml(scriptUrl) + '</span>';
-
-    refreshUninstallScript();
-    var uninstallSection = document.getElementById('client-uninstall-section');
-    var manualSection = document.getElementById('client-manual-section');
-    if (uninstallSection) uninstallSection.open = !!document.getElementById('client-option-include-uninstall').checked;
-    if (manualSection) manualSection.open = !!document.getElementById('client-option-show-manual').checked;
-}
-
-function buildUninstallScriptInfo(platform) {
-    if (platform === 'windows') {
-        return {
-            label: 'Windows 卸载（管理员 PowerShell）',
-            command: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
-                '$serviceName=\'CfSpeedtestClient\';' +
-                '$installDir=Join-Path $env:ProgramFiles \'CfSpeedtestClient\';' +
-                '$nssmExe=Join-Path $installDir \'nssm\\nssm.exe\';' +
-                'if (Test-Path $nssmExe) { & $nssmExe stop $serviceName | Out-Null; & $nssmExe remove $serviceName confirm | Out-Null };' +
-                'if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }' +
-                '"'
-        };
-    }
-
-    if (platform === 'macos') {
-        return {
-            label: 'macOS 卸载（launchd）',
-            command: 'sudo launchctl bootout system /Library/LaunchDaemons/com.cfspeedtest.client.plist 2>/dev/null; ' +
-                'sudo rm -f /Library/LaunchDaemons/com.cfspeedtest.client.plist; ' +
-                'sudo rm -rf /opt/cfspeedtest-client'
-        };
-    }
-
-    return {
-        label: 'Linux 卸载（自动适配 systemd / openrc / OpenWrt procd）',
-        command: 'sudo sh -c ' + shellQuote(
-            'SERVICE_NAME="cfspeedtest-client"; ' +
-            'if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then ' +
-                'systemctl stop "$SERVICE_NAME" 2>/dev/null || true; ' +
-                'systemctl disable "$SERVICE_NAME" 2>/dev/null || true; ' +
-                'rm -f "/etc/systemd/system/${SERVICE_NAME}.service"; ' +
-                'systemctl daemon-reload; ' +
-            'elif [ -f /etc/openwrt_release ] || [ -f /etc/rc.common ]; then ' +
-                'if [ -x "/etc/init.d/${SERVICE_NAME}" ]; then "/etc/init.d/${SERVICE_NAME}" stop 2>/dev/null || true; "/etc/init.d/${SERVICE_NAME}" disable 2>/dev/null || true; rm -f "/etc/init.d/${SERVICE_NAME}"; fi; ' +
-            'elif command -v rc-service >/dev/null 2>&1 || [ -x /sbin/openrc-run ]; then ' +
-                'rc-service "$SERVICE_NAME" stop 2>/dev/null || true; ' +
-                'rc-update del "$SERVICE_NAME" default 2>/dev/null || true; ' +
-                'rm -f "/etc/init.d/${SERVICE_NAME}"; ' +
-            'fi; ' +
-            'rm -rf /opt/cfspeedtest-client'
-        )
-    };
+        var data = r.data;
+        oneLinerEl.textContent = data.script || '';
+        oneLinerEl.dataset.command = data.script || '';
+        metaEl.innerHTML =
+            '脚本来源: <span style="font-family:monospace;">' + escapeHtml(data.scriptSource || '-') + '</span> &nbsp; ' +
+            '服务托管: <span style="font-family:monospace;">' + escapeHtml(data.serviceKind || '-') + '</span> &nbsp; ' +
+            '文件名: <span style="font-family:monospace;">' + escapeHtml(data.scriptFileName || '-') + '</span>' +
+            (data.scriptUrl ? ' &nbsp; 脚本地址: <span style="font-family:monospace;">' + escapeHtml(data.scriptUrl) + '</span>' : '');
+    }).catch(function(err) {
+        metaEl.textContent = '生成失败: ' + (err.message || 'unknown');
+    }).finally(function() {
+        refreshUninstallScript();
+        refreshManualClientCommand();
+        var uninstallSection = document.getElementById('client-uninstall-section');
+        var manualSection = document.getElementById('client-manual-section');
+        if (uninstallSection) uninstallSection.open = !!document.getElementById('client-option-include-uninstall').checked;
+        if (manualSection) manualSection.open = !!document.getElementById('client-option-show-manual').checked;
+    });
 }
 
 function refreshUninstallScript() {
@@ -1629,10 +1566,38 @@ function refreshUninstallScript() {
     var oneLinerEl = document.getElementById('uninstall-script-oneliner');
     if (!metaEl || !oneLinerEl) return;
 
-    var info = buildUninstallScriptInfo(currentInstallScriptPlatform);
-    metaEl.textContent = info.label;
-    oneLinerEl.textContent = info.command;
-    oneLinerEl.dataset.command = info.command;
+    metaEl.textContent = '正在生成卸载命令...';
+    oneLinerEl.textContent = '';
+    oneLinerEl.dataset.command = '';
+    requestClientScript('uninstall').then(function(r) {
+        if (!r.success || !r.data) {
+            metaEl.textContent = r.message || '当前无法生成卸载命令';
+            return;
+        }
+        metaEl.textContent = (r.data.platform || currentInstallScriptPlatform) + ' 卸载命令';
+        oneLinerEl.textContent = r.data.script || '';
+        oneLinerEl.dataset.command = r.data.script || '';
+    }).catch(function(err) {
+        metaEl.textContent = '生成失败: ' + (err.message || 'unknown');
+    });
+}
+
+function refreshManualClientCommand() {
+    var commandEl = document.getElementById('reserved-client-command');
+    if (!commandEl) return;
+
+    commandEl.dataset.command = '';
+    commandEl.textContent = '正在生成启动命令...';
+    requestClientScript('manual').then(function(r) {
+        if (!r.success || !r.data) {
+            commandEl.textContent = r.message || '当前无法生成启动命令';
+            return;
+        }
+        commandEl.dataset.command = r.data.script || '';
+        commandEl.textContent = '启动命令示例: ' + (r.data.script || '');
+    }).catch(function(err) {
+        commandEl.textContent = '生成失败: ' + (err.message || 'unknown');
+    });
 }
 
 function saveClientWhitelistOnly() {
@@ -1647,7 +1612,6 @@ function saveClientWhitelistOnly() {
 function reserveClientId() {
     var name = document.getElementById('reserve-client-name').value.trim();
     var isp = document.getElementById('reserve-client-isp').value;
-    var server = document.getElementById('reserve-client-server').value.trim() || window.location.origin;
     api('/api/clients/reserve', 'POST', { name: name, isp: isp }).then(function(r) {
         if (!r.success || !r.data) {
             toast(r.message || '生成失败', false);
@@ -1655,16 +1619,7 @@ function reserveClientId() {
         }
 
         var clientId = r.data.clientId;
-        var disableAutoUpdate = document.getElementById('client-option-disable-auto-update').checked;
-        var command = 'CfSpeedtest.Client.exe --server ' + server +
-            ' --client-id ' + clientId +
-            ' --isp ' + isp +
-            (name ? ' --name ' + name : '') +
-            (disableAutoUpdate ? ' --disable-auto-update' : '');
         document.getElementById('reserved-client-id').value = clientId;
-        var commandEl = document.getElementById('reserved-client-command');
-        commandEl.dataset.command = command;
-        commandEl.textContent = '启动命令示例: ' + command;
         refreshInstallScript();
         toast('clientId 已生成并加入允许列表');
         loadClients();
@@ -2144,6 +2099,7 @@ function loadConfig() {
         document.getElementById('cfg-downloaddur').value = c.downloadDurationSeconds || 10;
         document.getElementById('cfg-tcpdur').value = c.tcpTestDurationSeconds || 10;
         document.getElementById('cfg-topn').value = c.topN || 5;
+        document.getElementById('cfg-max-test-ip-count').value = c.maxTestIpCount || 40;
         document.getElementById('cfg-client-interval').value = c.clientIntervalMinutes || 60;
         document.getElementById('cfg-history-retention-days').value = c.historyRetentionDays != null ? c.historyRetentionDays : 30;
         document.getElementById('cfg-min-download-speed').value = c.minDownloadSpeedKBps || 0;
@@ -2219,6 +2175,7 @@ function saveConfig(e) {
     serverConfigData.downloadDurationSeconds = parseInt(document.getElementById('cfg-downloaddur').value) || 10;
     serverConfigData.tcpTestDurationSeconds = parseInt(document.getElementById('cfg-tcpdur').value) || 10;
     serverConfigData.topN = parseInt(document.getElementById('cfg-topn').value) || 5;
+    serverConfigData.maxTestIpCount = Math.max(serverConfigData.batchSize, parseInt(document.getElementById('cfg-max-test-ip-count').value) || 40);
     serverConfigData.clientIntervalMinutes = parseInt(document.getElementById('cfg-client-interval').value) || 60;
     serverConfigData.historyRetentionDays = Math.max(0, parseInt(document.getElementById('cfg-history-retention-days').value) || 0);
     serverConfigData.minDownloadSpeedKBps = parseFloat(document.getElementById('cfg-min-download-speed').value) || 0;

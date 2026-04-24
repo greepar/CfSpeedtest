@@ -105,22 +105,21 @@ public class DnsUpdateService
         var hwConfig = config.HuaweiDns;
         var ispKey = isp.ToString();
 
-        var aggregatedResults = bestResults
-            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
-            .OrderByDescending(r => r.Score)
-            .GroupBy(r => r.IpAddress)
-            .Select(g => g.First())
-            .Take(config.TopN)
-            .ToList();
+        var aggregatedResults = SelectDnsCandidates(bestResults, config.TopN, config.MinDownloadSpeedKBps);
+        var usingFallback = aggregatedResults.Count > 0 && aggregatedResults.All(r => r.DownloadSpeedKBps < config.MinDownloadSpeedKBps);
 
         if (aggregatedResults.Count == 0)
         {
             aggregatedResults = AggregateLatestResultsForIsp(isp, config.TopN);
+            usingFallback = aggregatedResults.Count > 0 && aggregatedResults.All(r => r.DownloadSpeedKBps < config.MinDownloadSpeedKBps);
         }
 
         if (!hwConfig.Enabled)
         {
-            UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false, "华为云 DNS 未启用，当前仅展示本次汇总 TopN");
+            UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
+                usingFallback
+                    ? $"华为云 DNS 未启用，当前仅展示本次兜底结果（未达到最低下载速度 {config.MinDownloadSpeedKBps:F1} KB/s）"
+                    : "华为云 DNS 未启用，当前仅展示本次汇总 TopN");
             _logger.LogDebug("Huawei DNS update is disabled, skipping for {Isp}", isp);
             return;
         }
@@ -133,13 +132,17 @@ public class DnsUpdateService
             {
                 var remaining = lastStatus.LastUpdatedAt.Value.AddMinutes(hwConfig.UpdateIntervalMinutes) - DateTime.UtcNow;
                 UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
-                    $"已汇总本次 TopN，等待按轮次自动更新（剩余约 {Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟）");
+                    usingFallback
+                        ? $"已汇总本次兜底结果（未达到最低下载速度 {config.MinDownloadSpeedKBps:F1} KB/s），等待按轮次自动更新（剩余约 {Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟）"
+                        : $"已汇总本次 TopN，等待按轮次自动更新（剩余约 {Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟）");
                 _logger.LogDebug("DNS interval not reached yet for {Isp}, skipping round-triggered update", isp);
                 return;
             }
 
             UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
-                $"已汇总本次 TopN，本轮收口触发自动更新（{hwConfig.UpdateIntervalMinutes} 分钟间隔）");
+                usingFallback
+                    ? $"已汇总本次兜底结果（未达到最低下载速度 {config.MinDownloadSpeedKBps:F1} KB/s），本轮收口触发自动更新（{hwConfig.UpdateIntervalMinutes} 分钟间隔）"
+                    : $"已汇总本次 TopN，本轮收口触发自动更新（{hwConfig.UpdateIntervalMinutes} 分钟间隔）");
         }
 
         if (aggregatedResults.Count == 0)
@@ -302,26 +305,35 @@ public class DnsUpdateService
 
         var allResults = latestPerClient
             .SelectMany(h => h.Results)
-            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
-            .OrderByDescending(r => r.Score)
             .ToList();
 
-        var uniqueResults = new List<IpTestResult>();
-        var seen = new HashSet<string>();
-        foreach (var r in allResults)
-        {
-            if (seen.Add(r.IpAddress))
-            {
-                uniqueResults.Add(r);
-                if (uniqueResults.Count >= topN)
-                    break;
-            }
-        }
+        var uniqueResults = SelectDnsCandidates(allResults, topN, config.MinDownloadSpeedKBps);
 
         _logger.LogInformation("Aggregated {Count} unique IPs for {Isp} from {ClientCount} clients",
             uniqueResults.Count, isp, latestPerClient.Count);
 
         return uniqueResults;
+    }
+
+    private static List<IpTestResult> SelectDnsCandidates(IEnumerable<IpTestResult> results, int topN, double minDownloadSpeedKBps)
+    {
+        var orderedUniqueResults = results
+            .OrderByDescending(r => r.Score)
+            .GroupBy(r => r.IpAddress)
+            .Select(g => g.First())
+            .ToList();
+
+        var qualifiedResults = orderedUniqueResults
+            .Where(r => r.DownloadSpeedKBps >= minDownloadSpeedKBps)
+            .Take(topN)
+            .ToList();
+
+        if (qualifiedResults.Count > 0)
+        {
+            return qualifiedResults;
+        }
+
+        return orderedUniqueResults.Take(1).ToList();
     }
 
     /// <summary>
