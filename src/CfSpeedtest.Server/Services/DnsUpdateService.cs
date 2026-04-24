@@ -30,7 +30,7 @@ public class DnsUpdateService
     /// <summary>
     /// 获取各运营商的DNS更新状态
     /// </summary>
-    public List<DnsUpdateStatus> GetStatus()
+    public List<DnsUpdateStatus> GetStatus(DateTime? from = null, DateTime? to = null)
     {
         var config = _store.GetConfig();
         var hwConfig = config.HuaweiDns;
@@ -39,7 +39,9 @@ public class DnsUpdateService
         foreach (var isp in new[] { "Telecom", "Unicom", "Mobile" })
         {
             Enum.TryParse<IspType>(isp, out var ispEnum);
-            var aggregatedResults = AggregateLatestResultsForIsp(ispEnum, config.TopN);
+            var aggregatedResults = from.HasValue && to.HasValue
+                ? AggregateResultsForIspByTimeRange(ispEnum, config.TopN, from.Value, to.Value)
+                : AggregateLatestResultsForIsp(ispEnum, config.TopN);
 
             if (_lastStatus.TryGetValue(isp, out var status))
             {
@@ -158,7 +160,7 @@ public class DnsUpdateService
     /// <summary>
     /// 手动触发 DNS 更新（从 WebUI 调用）
     /// </summary>
-    public async Task<List<DnsUpdateStatus>> ManualUpdateAsync(string? ispFilter)
+    public async Task<List<DnsUpdateStatus>> ManualUpdateAsync(string? ispFilter, DateTime? from = null, DateTime? to = null)
     {
         var config = _store.GetConfig();
         var hwConfig = config.HuaweiDns;
@@ -166,6 +168,17 @@ public class DnsUpdateService
         if (!hwConfig.Enabled)
         {
             return [new DnsUpdateStatus { Message = "华为云 DNS 未启用", Success = false }];
+        }
+
+        // 如果没有指定时间段，默认使用最新时间段
+        if (!from.HasValue || !to.HasValue)
+        {
+            var segments = _store.GetHistoryTimeSegments();
+            if (segments.Count > 0)
+            {
+                from = segments[0].From;
+                to = segments[0].To;
+            }
         }
 
         var isps = string.IsNullOrEmpty(ispFilter)
@@ -182,7 +195,9 @@ public class DnsUpdateService
                 continue;
             }
 
-            var aggregatedResults = AggregateLatestResultsForIsp(ispEnum, config.TopN);
+            var aggregatedResults = from.HasValue && to.HasValue
+                ? AggregateResultsForIspByTimeRange(ispEnum, config.TopN, from.Value, to.Value)
+                : AggregateLatestResultsForIsp(ispEnum, config.TopN);
             if (aggregatedResults.Count == 0)
             {
                 var status = new DnsUpdateStatus
@@ -311,6 +326,28 @@ public class DnsUpdateService
 
         _logger.LogInformation("Aggregated {Count} unique IPs for {Isp} from {ClientCount} clients",
             uniqueResults.Count, isp, latestPerClient.Count);
+
+        return uniqueResults;
+    }
+
+    /// <summary>
+    /// 按时间段聚合某运营商所有客户端的测速结果
+    /// </summary>
+    public List<IpTestResult> AggregateResultsForIspByTimeRange(IspType isp, int topN, DateTime from, DateTime to)
+    {
+        var history = _store.GetHistoryByTimeRange(from, to);
+        var config = _store.GetConfig();
+
+        var ispHistory = history.Where(h => h.Isp == isp).ToList();
+
+        var allResults = ispHistory
+            .SelectMany(h => h.Results)
+            .ToList();
+
+        var uniqueResults = SelectDnsCandidates(allResults, topN, config.MinDownloadSpeedKBps);
+
+        _logger.LogInformation("Aggregated {Count} unique IPs for {Isp} in time range {From:HH:mm}~{To:HH:mm} from {RecordCount} records",
+            uniqueResults.Count, isp, from, to, ispHistory.Count);
 
         return uniqueResults;
     }

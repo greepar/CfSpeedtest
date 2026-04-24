@@ -630,6 +630,23 @@ public class DnsUpdateTriggerRequest
 {
     /// <summary>运营商（Telecom/Unicom/Mobile），为空则更新所有</summary>
     public string? Isp { get; set; }
+
+    /// <summary>可选的时间段起始(UTC)，用于指定使用哪个时间段的测速记录</summary>
+    public DateTime? From { get; set; }
+
+    /// <summary>可选的时间段结束(UTC)</summary>
+    public DateTime? To { get; set; }
+}
+
+/// <summary>
+/// 测速记录的小时时间段
+/// </summary>
+public class HistoryTimeSegment
+{
+    public DateTime From { get; set; }
+    public DateTime To { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public int Count { get; set; }
 }
 
 /// <summary>

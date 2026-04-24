@@ -773,9 +773,16 @@ app.MapPost("/api/clients/{clientId}/allow", (string clientId, bool allowed, Dat
 // ============================================================
 //  API: WebUI - 获取历史记录
 // ============================================================
-app.MapGet("/api/history", (DataStore store, int? limit) =>
+app.MapGet("/api/history", (DataStore store, int? limit, DateTime? from, DateTime? to) =>
 {
+    if (from.HasValue && to.HasValue)
+        return ApiResponse<List<TestHistory>>.Ok(store.GetHistoryByTimeRange(from.Value, to.Value, limit ?? 500));
     return ApiResponse<List<TestHistory>>.Ok(store.GetHistory(limit ?? 100));
+});
+
+app.MapGet("/api/history/segments", (DataStore store) =>
+{
+    return ApiResponse<List<HistoryTimeSegment>>.Ok(store.GetHistoryTimeSegments());
 });
 
 app.MapPost("/api/history/cleanup", (DataStore store) =>
@@ -883,9 +890,9 @@ app.MapGet("/api/rounds/status", (RoundCoordinatorService rounds) =>
 // ============================================================
 //  API: WebUI - 获取 DNS 更新状态
 // ============================================================
-app.MapGet("/api/dns/status", (DnsUpdateService dns) =>
+app.MapGet("/api/dns/status", (DnsUpdateService dns, DateTime? from, DateTime? to) =>
 {
-    return ApiResponse<List<DnsUpdateStatus>>.Ok(dns.GetStatus());
+    return ApiResponse<List<DnsUpdateStatus>>.Ok(dns.GetStatus(from, to));
 });
 
 // ============================================================
@@ -893,7 +900,7 @@ app.MapGet("/api/dns/status", (DnsUpdateService dns) =>
 // ============================================================
 app.MapPost("/api/dns/update", async (DnsUpdateTriggerRequest? req, DnsUpdateService dns) =>
 {
-    var results = await dns.ManualUpdateAsync(req?.Isp);
+    var results = await dns.ManualUpdateAsync(req?.Isp, req?.From, req?.To);
     return ApiResponse<List<DnsUpdateStatus>>.Ok(results);
 });
 

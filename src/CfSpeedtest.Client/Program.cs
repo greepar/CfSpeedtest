@@ -257,16 +257,17 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         allResults.Add(result);
         runtimeState.SetTesting(maxTestIpCount, testedIps.Count);
 
-        // 队列为空时尝试补拉，不受 qualifiedCount 影响
+        // 达标检查：每测完一个 IP 就检查，够了直接停
+        var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
+        if (qualifiedCount >= task.TopN)
+        {
+            runtimeState.AppendLog($"Qualified count ({qualifiedCount}) >= TopN ({task.TopN}), stopping");
+            break;
+        }
+
+        // 队列为空时尝试补拉
         if (pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
         {
-            var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
-            if (qualifiedCount >= task.TopN)
-            {
-                runtimeState.AppendLog($"Qualified count ({qualifiedCount}) >= TopN ({task.TopN}), stopping");
-                break;
-            }
-
             var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, transportState.HttpClient);
             runtimeState.AppendLog($"Requested additional IP batch, received {additionalIps.Count} IP(s)");
             foreach (var extraIp in additionalIps)

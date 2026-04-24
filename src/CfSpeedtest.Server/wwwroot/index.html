@@ -404,7 +404,9 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 <div id="panel-history" class="panel">
     <div class="card">
         <h2>测速历史</h2>
-        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+            <label style="font-size:13px; color:var(--text2); white-space:nowrap; margin:0;">时间段:</label>
+            <select id="history-segment-select" onchange="onHistorySegmentChange()" style="width:auto; min-width:220px;"></select>
             <button class="btn btn-secondary" type="button" onclick="cleanupHistory()">立即清理过期记录</button>
             <button class="btn danger-btn" type="button" onclick="clearHistory()">清空全部测速记录</button>
         </div>
@@ -718,7 +720,11 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
         </div>
 
         <!-- 手动触发 & 状态 -->
-        <div style="display:flex; gap:8px; margin-bottom:16px;">
+        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+            <label style="font-size:13px; color:var(--text2); white-space:nowrap; margin:0;">使用时间段:</label>
+            <select id="dns-segment-select" onchange="onDnsSegmentChange()" style="width:auto; min-width:220px;"></select>
+        </div>
+        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
             <button class="btn btn-primary" onclick="triggerDnsUpdate(null)">更新所有运营商 DNS</button>
             <button class="btn btn-secondary" onclick="triggerDnsUpdate('Telecom')">仅更新电信</button>
             <button class="btn btn-secondary" onclick="triggerDnsUpdate('Unicom')">仅更新联通</button>
@@ -727,7 +733,7 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
         </div>
 
         <div style="font-size:12px; color:var(--text2); margin-bottom:10px;">
-            下方显示的是各运营商<strong>最终综合汇总后的 TopN 结果</strong>，也就是实际用于 DNS 更新的候选 IP 列表。
+            下方显示的是各运营商在所选时间段内<strong>综合汇总后的 TopN 结果</strong>，也就是用于 DNS 更新的候选 IP 列表。
         </div>
         <div id="dns-status-list"></div>
     </div>
@@ -923,6 +929,9 @@ let clientsRefreshTimer = null;
 let clientLogRefreshTimer = null;
 let currentClientLogId = null;
 let authStatus = null;
+let historySegments = [];
+let selectedHistorySegment = null;
+let selectedDnsSegment = null;
 
 // ========== Tab switching ==========
 
@@ -1330,10 +1339,41 @@ function triggerManualRound() {
 // ========== History ==========
 
 function loadHistory() {
-    api('/api/history?limit=100').then(function(r) {
+    api('/api/history/segments').then(function(r) {
+        historySegments = r.data || [];
+        var sel = document.getElementById('history-segment-select');
+        var prevVal = sel.value;
+        sel.innerHTML = '<option value="">-- 全部记录 --</option>';
+        historySegments.forEach(function(s) {
+            var val = s.from + '|' + s.to;
+            sel.innerHTML += '<option value="' + val + '">' + s.label + ' (' + s.count + '条)</option>';
+        });
+        if (selectedHistorySegment) {
+            sel.value = selectedHistorySegment;
+        } else if (historySegments.length > 0) {
+            sel.value = historySegments[0].from + '|' + historySegments[0].to;
+            selectedHistorySegment = sel.value;
+        }
+        loadHistoryBySegment();
+    });
+}
+
+function onHistorySegmentChange() {
+    selectedHistorySegment = document.getElementById('history-segment-select').value;
+    loadHistoryBySegment();
+}
+
+function loadHistoryBySegment() {
+    var url = '/api/history?limit=200';
+    var seg = document.getElementById('history-segment-select').value;
+    if (seg) {
+        var parts = seg.split('|');
+        url += '&from=' + encodeURIComponent(parts[0]) + '&to=' + encodeURIComponent(parts[1]);
+    }
+    api(url).then(function(r) {
         var data = r.data || [];
         if (data.length === 0) {
-            document.getElementById('history-list').innerHTML = '<div class="empty-state">暂无记录</div>';
+            document.getElementById('history-list').innerHTML = '<div class="empty-state">该时间段暂无记录</div>';
             return;
         }
         var html = '';
@@ -2248,8 +2288,36 @@ function loadDnsPanel() {
     p1.then(function() {
         fillDnsGlobalFields();
         fillDnsRecordFields();
+        loadDnsSegments();
+    });
+}
+
+function loadDnsSegments() {
+    api('/api/history/segments').then(function(r) {
+        var segments = r.data || [];
+        var sel = document.getElementById('dns-segment-select');
+        sel.innerHTML = '<option value="">最新一次测速（默认）</option>';
+        segments.forEach(function(s) {
+            var val = s.from + '|' + s.to;
+            sel.innerHTML += '<option value="' + val + '">' + s.label + ' (' + s.count + '条)</option>';
+        });
+        if (selectedDnsSegment) {
+            sel.value = selectedDnsSegment;
+        }
         loadDnsStatus();
     });
+}
+
+function onDnsSegmentChange() {
+    selectedDnsSegment = document.getElementById('dns-segment-select').value;
+    loadDnsStatus();
+}
+
+function getDnsSegmentParams() {
+    var seg = document.getElementById('dns-segment-select').value;
+    if (!seg) return {};
+    var parts = seg.split('|');
+    return { from: parts[0], to: parts[1] };
 }
 
 function fillDnsGlobalFields() {
@@ -2334,6 +2402,8 @@ function testHuaweiDnsRecordConfig() {
 
 function triggerDnsUpdate(isp) {
     var body = isp ? { isp: isp } : {};
+    var segParams = getDnsSegmentParams();
+    if (segParams.from) { body.from = segParams.from; body.to = segParams.to; }
     var label = isp ? ISP_NAMES[isp] : '所有运营商';
     toast('正在触发 ' + label + ' DNS 更新...');
     api('/api/dns/update', 'POST', body).then(function(r) {
@@ -2374,7 +2444,12 @@ function triggerDnsTestAndUpdate(isp) {
 }
 
 function loadDnsStatus() {
-    api('/api/dns/status').then(function(r) {
+    var segParams = getDnsSegmentParams();
+    var url = '/api/dns/status';
+    if (segParams.from) {
+        url += '?from=' + encodeURIComponent(segParams.from) + '&to=' + encodeURIComponent(segParams.to);
+    }
+    api(url).then(function(r) {
         if (r.success) {
             renderDnsStatus(r.data || []);
         }

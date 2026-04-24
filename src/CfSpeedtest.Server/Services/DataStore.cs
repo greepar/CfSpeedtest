@@ -291,6 +291,33 @@ public class DataStore
         return [.. _history.Where(h => h.Isp == isp).OrderByDescending(h => h.CompletedAt).Take(limit)];
     }
 
+    public List<TestHistory> GetHistoryByTimeRange(DateTime from, DateTime to, int limit = 500)
+    {
+        return [.. _history
+            .Where(h => h.CompletedAt >= from && h.CompletedAt < to)
+            .OrderByDescending(h => h.CompletedAt)
+            .Take(limit)];
+    }
+
+    public List<HistoryTimeSegment> GetHistoryTimeSegments()
+    {
+        return _history
+            .GroupBy(h =>
+            {
+                var utc = h.CompletedAt.ToUniversalTime();
+                return new DateTime(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, DateTimeKind.Utc);
+            })
+            .Select(g => new HistoryTimeSegment
+            {
+                From = g.Key,
+                To = g.Key.AddHours(1),
+                Label = $"{g.Key:yyyy-MM-dd HH:00} ~ {g.Key.AddHours(1):HH:00}",
+                Count = g.Count(),
+            })
+            .OrderByDescending(s => s.From)
+            .ToList();
+    }
+
     public void AddHistory(TestHistory history)
     {
         _history.Add(history);
