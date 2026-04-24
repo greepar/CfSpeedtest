@@ -808,16 +808,20 @@ app.MapDelete("/api/history/{historyId}", (string historyId, DataStore store) =>
 app.MapGet("/api/ippool", (DataStore store) =>
 {
     var config = store.GetConfig();
-    var result = new Dictionary<string, List<string>>();
+    var result = new Dictionary<string, IpPoolView>();
     
     foreach (var isp in new[] { "Telecom", "Unicom", "Mobile" })
     {
         var manualIps = config.IpSources.TryGetValue(isp, out var source) ? source.ManualIps : [];
         var apiIps = store.GetApiIpPool(isp);
-        result[isp] = manualIps.Concat(apiIps).Distinct().ToList();
+        result[isp] = new IpPoolView
+        {
+            ManualIps = manualIps.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            ApiIps = apiIps.Where(ip => !manualIps.Contains(ip, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+        };
     }
     
-    return ApiResponse<Dictionary<string, List<string>>>.Ok(result);
+    return ApiResponse<Dictionary<string, IpPoolView>>.Ok(result);
 });
 
 // ============================================================
@@ -825,28 +829,29 @@ app.MapGet("/api/ippool", (DataStore store) =>
 // ============================================================
 app.MapPost("/api/ippool/add", (IpPoolAddRequest req, DataStore store) =>
 {
-    var config = store.GetConfig();
-    if (!config.IpSources.ContainsKey(req.Isp))
-        config.IpSources[req.Isp] = new();
-
-    var manualIps = config.IpSources[req.Isp].ManualIps;
-    foreach (var ip in req.Ips)
-    {
-        var trimmed = ip.Trim();
-        if (!string.IsNullOrEmpty(trimmed) && !manualIps.Contains(trimmed))
-            manualIps.Add(trimmed);
-    }
-    store.SaveConfig(config);
+    store.AddManualIps(req.Isp, req.Ips);
     return ApiResponse<string>.Ok($"Added {req.Ips.Count} IPs to {req.Isp}");
 });
 
 // ============================================================
-//  API: WebUI - 覆盖当前池内容
+//  API: WebUI - 覆盖当前运营商的手动 IP 池
 // ============================================================
 app.MapPost("/api/ippool/replace", (IpPoolReplaceRequest req, DataStore store) =>
 {
-    store.ReplaceIpPool(req.Isp, req.Ips);
-    return ApiResponse<string>.Ok($"Replaced pool for {req.Isp}");
+    store.ReplaceManualIpPool(req.Isp, req.Ips);
+    return ApiResponse<string>.Ok($"Replaced manual pool for {req.Isp}");
+});
+
+app.MapPost("/api/ippool/remove", (IpPoolRemoveRequest req, DataStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Isp) || string.IsNullOrWhiteSpace(req.Ip) || string.IsNullOrWhiteSpace(req.Source))
+    {
+        return ApiResponse<string>.Fail("Isp, Ip and Source are required");
+    }
+
+    return store.RemovePoolIp(req.Isp, req.Ip, req.Source)
+        ? ApiResponse<string>.Ok("IP 已删除")
+        : ApiResponse<string>.Fail("IP 不存在");
 });
 
 // ============================================================

@@ -152,6 +152,7 @@ while (true)
     catch (Exception ex)
     {
         Console.WriteLine($"Error in test cycle: {ex.Message}");
+        runtimeState.AppendLog($"Error in test cycle: {ex.Message}");
     }
 
     if (oneshot) break;
@@ -204,6 +205,8 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     var testedIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var pendingIps = new Queue<string>(task.IpAddresses);
     var maxTestIpCount = Math.Max(task.IpAddresses.Count, task.MaxTestIpCount);
+    Console.WriteLine($"MaxTestIpCount: {maxTestIpCount} (server={task.MaxTestIpCount}, batch={task.IpAddresses.Count})");
+    runtimeState.AppendLog($"MaxTestIpCount={maxTestIpCount}");
     runtimeState.SetTesting(maxTestIpCount, 0);
 
     while (pendingIps.Count > 0)
@@ -254,12 +257,16 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         allResults.Add(result);
         runtimeState.SetTesting(maxTestIpCount, testedIps.Count);
 
-        var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
-        if (qualifiedCount >= task.TopN)
-            continue;
-
+        // 队列为空时尝试补拉，不受 qualifiedCount 影响
         if (pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
         {
+            var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
+            if (qualifiedCount >= task.TopN)
+            {
+                runtimeState.AppendLog($"Qualified count ({qualifiedCount}) >= TopN ({task.TopN}), stopping");
+                break;
+            }
+
             var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, transportState.HttpClient);
             runtimeState.AppendLog($"Requested additional IP batch, received {additionalIps.Count} IP(s)");
             foreach (var extraIp in additionalIps)
@@ -267,6 +274,10 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
                 if (!testedIps.Contains(extraIp))
                     pendingIps.Enqueue(extraIp);
             }
+        }
+        else if (pendingIps.Count == 0 && testedIps.Count >= maxTestIpCount)
+        {
+            runtimeState.AppendLog($"Reached max test IP count limit: {maxTestIpCount}, no more fetching");
         }
     }
 
@@ -281,14 +292,14 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         ? qualifiedResults
         : allResults
             .OrderByDescending(r => r.Score)
-            .Take(1)
+            .Take(task.TopN)
             .ToList();
 
     Console.WriteLine();
     if (qualifiedResults.Count > 0)
         Console.WriteLine($"=== Qualified Top {topResults.Count} Results ===");
     else
-        Console.WriteLine($"=== No results met min speed {task.MinDownloadSpeedKBps:F1} KB/s, fallback to best 1 result ===");
+        Console.WriteLine($"=== No results met min speed {task.MinDownloadSpeedKBps:F1} KB/s, fallback to top {topResults.Count} by score ===");
     for (int i = 0; i < topResults.Count; i++)
     {
         var r = topResults[i];

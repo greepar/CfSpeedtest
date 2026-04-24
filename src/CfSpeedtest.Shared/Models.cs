@@ -439,6 +439,19 @@ public class IpPoolReplaceRequest
     public List<string> Ips { get; set; } = [];
 }
 
+public class IpPoolRemoveRequest
+{
+    public string Isp { get; set; } = "Telecom";
+    public string Ip { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+}
+
+public class IpPoolView
+{
+    public List<string> ManualIps { get; set; } = [];
+    public List<string> ApiIps { get; set; } = [];
+}
+
 /// <summary>
 /// 服务端全局配置
 /// </summary>
@@ -454,6 +467,9 @@ public class ServerConfig
 
     /// <summary>API拉取间隔(分钟)</summary>
     public int ApiRefreshIntervalMinutes { get; set; } = 60;
+
+    /// <summary>分发测速任务时是否优先使用手动 IP 池</summary>
+    public bool ManualIpPriorityEnabled { get; set; } = true;
 
     /// <summary>测速URL模板</summary>
     public string TestUrl { get; set; } = "https://{ip}/__down?bytes=104857600";

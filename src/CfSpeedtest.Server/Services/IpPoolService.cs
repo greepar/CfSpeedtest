@@ -197,21 +197,42 @@ public class IpPoolService : BackgroundService
         var manualIps = config.IpSources.TryGetValue(isp, out var source) ? source.ManualIps : [];
         var apiIps = _store.GetApiIpPool(isp);
         var excludeSet = excludeIps.Select(ip => ip.Trim()).Where(ip => !string.IsNullOrWhiteSpace(ip)).ToHashSet();
-        
-        var allIps = manualIps.Concat(apiIps).Distinct().Where(ip => !excludeSet.Contains(ip)).ToList();
 
-        if (allIps.Count == 0) return [];
+        var filteredManualIps = manualIps
+            .Where(ip => !excludeSet.Contains(ip))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var filteredApiIps = apiIps
+            .Where(ip => !excludeSet.Contains(ip) && !filteredManualIps.Contains(ip, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        var batchSize = Math.Min(config.BatchSize, allIps.Count);
+        if (filteredManualIps.Count == 0 && filteredApiIps.Count == 0) return [];
 
-        // 随机打乱后取batch
+        var batchSize = Math.Min(config.BatchSize, filteredManualIps.Count + filteredApiIps.Count);
+
         var rng = Random.Shared;
-        for (int i = allIps.Count - 1; i > 0; i--)
+        for (int i = filteredApiIps.Count - 1; i > 0; i--)
         {
             int j = rng.Next(i + 1);
-            (allIps[i], allIps[j]) = (allIps[j], allIps[i]);
+            (filteredApiIps[i], filteredApiIps[j]) = (filteredApiIps[j], filteredApiIps[i]);
         }
 
-        return allIps.Take(batchSize).ToList();
+        if (!config.ManualIpPriorityEnabled)
+        {
+            var allIps = filteredManualIps.Concat(filteredApiIps).ToList();
+            for (int i = allIps.Count - 1; i > 0; i--)
+            {
+                int j = rng.Next(i + 1);
+                (allIps[i], allIps[j]) = (allIps[j], allIps[i]);
+            }
+
+            return allIps.Take(batchSize).ToList();
+        }
+
+        return filteredManualIps
+            .Concat(filteredApiIps)
+            .Take(batchSize)
+            .ToList();
     }
 }

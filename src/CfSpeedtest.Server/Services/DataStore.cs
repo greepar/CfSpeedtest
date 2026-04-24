@@ -117,6 +117,88 @@ public class DataStore
         }
     }
 
+    public void AddManualIps(string isp, IEnumerable<string> ips)
+    {
+        lock (_lock)
+        {
+            if (!_config.IpSources.ContainsKey(isp))
+            {
+                _config.IpSources[isp] = new();
+            }
+
+            var existing = new HashSet<string>(_config.IpSources[isp].ManualIps, StringComparer.OrdinalIgnoreCase);
+            foreach (var ip in ips.Select(ip => ip.Trim()).Where(ip => !string.IsNullOrWhiteSpace(ip)))
+            {
+                if (existing.Add(ip))
+                {
+                    _config.IpSources[isp].ManualIps.Add(ip);
+                }
+            }
+
+            PersistFile("config.json", _config);
+        }
+    }
+
+    public void ReplaceManualIpPool(string isp, IEnumerable<string> ips)
+    {
+        lock (_lock)
+        {
+            if (!_config.IpSources.ContainsKey(isp))
+            {
+                _config.IpSources[isp] = new();
+            }
+
+            _config.IpSources[isp].ManualIps = ips
+                .Select(ip => ip.Trim())
+                .Where(ip => !string.IsNullOrWhiteSpace(ip))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            PersistFile("config.json", _config);
+        }
+    }
+
+    public bool RemovePoolIp(string isp, string ip, string source)
+    {
+        lock (_lock)
+        {
+            var removed = false;
+
+            if (string.Equals(source, "manual", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_config.IpSources.TryGetValue(isp, out var sourceConfig))
+                {
+                    var before = sourceConfig.ManualIps.Count;
+                    sourceConfig.ManualIps = sourceConfig.ManualIps
+                        .Where(x => !string.Equals(x, ip, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    removed = sourceConfig.ManualIps.Count != before;
+                    if (removed)
+                    {
+                        PersistFile("config.json", _config);
+                    }
+                }
+
+                return removed;
+            }
+
+            if (_apiIpPools.TryGetValue(isp, out var apiPool))
+            {
+                var filtered = apiPool
+                    .Where(x => !string.Equals(x, ip, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                removed = filtered.Count != apiPool.Count;
+                if (removed)
+                {
+                    _apiIpPools[isp] = filtered;
+                    PersistFile("ippool.json", _apiIpPools);
+                }
+            }
+
+            return removed;
+        }
+    }
+
     /// <summary>
     /// 从指定运营商的IP池中移除一批IP
     /// </summary>
@@ -135,18 +217,9 @@ public class DataStore
                 removed += before - _apiIpPools[isp].Count;
             }
 
-            // 从手动 IP 列表移除
-            if (_config.IpSources.TryGetValue(isp, out var source))
-            {
-                var before = source.ManualIps.Count;
-                source.ManualIps = source.ManualIps.Where(ip => !removeSet.Contains(ip)).ToList();
-                removed += before - source.ManualIps.Count;
-            }
-
             if (removed > 0)
             {
                 PersistFile("ippool.json", _apiIpPools);
-                PersistFile("config.json", _config);
             }
 
             return removed;

@@ -613,15 +613,20 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
                 <option value="false">关闭</option>
                 <option value="true">启用</option>
             </select>
+            <label style="font-size:13px; color:var(--text2); white-space:nowrap; margin:0;">手动 IP 优先分发</label>
+            <select id="pool-manual-priority" style="width:auto;" onchange="toggleManualIpPriority()">
+                <option value="true">启用</option>
+                <option value="false">关闭</option>
+            </select>
             <span id="pool-cleanup-hint" style="font-size:12px; color:var(--text2);">启用后，每次测速完成自动只保留最优 IP，其余从池中删除</span>
         </div>
 
         <div class="pool-toolbar">
-            <button class="btn btn-secondary" onclick="enterPoolEditMode()">文本编辑模式</button>
-            <button class="btn btn-primary" id="save-pool-edit-btn" onclick="savePoolEditMode()" style="display:none;">保存文本修改</button>
+            <button class="btn btn-secondary" onclick="enterPoolEditMode()">编辑手动 IP 池</button>
+            <button class="btn btn-primary" id="save-pool-edit-btn" onclick="savePoolEditMode()" style="display:none;">保存手动池修改</button>
             <button class="btn btn-secondary" id="cancel-pool-edit-btn" onclick="cancelPoolEditMode()" style="display:none;">取消</button>
         </div>
-        <textarea id="pool-edit-textarea" style="display:none; min-height:240px; margin-bottom:12px;" placeholder="每行一个 IP"></textarea>
+        <textarea id="pool-edit-textarea" style="display:none; min-height:240px; margin-bottom:12px;" placeholder="每行一个手动 IP"></textarea>
         <div id="ippool-list" style="max-height:400px;overflow-y:auto;"></div>
     </div>
 </div>
@@ -1843,9 +1848,10 @@ function loadIpPool() {
 function syncCleanupToggle() {
     if (serverConfigData) {
         document.getElementById('pool-auto-cleanup').value = serverConfigData.autoCleanupEnabled ? 'true' : 'false';
+        document.getElementById('pool-manual-priority').value = serverConfigData.manualIpPriorityEnabled === false ? 'false' : 'true';
         var topN = serverConfigData.topN || 5;
         document.getElementById('pool-cleanup-hint').textContent =
-            '启用后，每次测速完成自动只保留 Top ' + topN + ' 最优 IP，其余从池中删除（Top N 在配置页设置）';
+            '启用后，每次测速完成自动只保留 API 池中的 Top ' + topN + ' 最优 IP，手动 IP 池不会被自动清理';
     }
 }
 
@@ -1858,24 +1864,38 @@ function toggleAutoCleanup() {
     });
 }
 
+function toggleManualIpPriority() {
+    if (!serverConfigData) return;
+    serverConfigData.manualIpPriorityEnabled = document.getElementById('pool-manual-priority').value === 'true';
+    api('/api/config', 'POST', serverConfigData).then(function(r) {
+        if (r.success) toast('手动 IP 优先分发' + (serverConfigData.manualIpPriorityEnabled ? '已启用' : '已关闭'));
+        else toast(r.message || '保存失败', false);
+    });
+}
+
 function renderIpPoolList() {
-    var data = allIpPoolData[currentIspTab] || [];
+    var pool = allIpPoolData[currentIspTab] || { manualIps: [], apiIps: [] };
+    var manualIps = pool.manualIps || [];
+    var apiIps = pool.apiIps || [];
+    var data = manualIps.map(function(ip) { return { ip: ip, source: 'manual' }; })
+        .concat(apiIps.map(function(ip) { return { ip: ip, source: 'api' }; }));
     document.getElementById('ip-count').textContent = data.length;
     if (data.length === 0) {
         document.getElementById('ippool-list').innerHTML = '<div class="empty-state">当前池子为空</div>';
         return;
     }
-    var html = '<table><thead><tr><th>#</th><th>IP 地址</th><th style="width:80px;">操作</th></tr></thead><tbody>';
-    data.forEach(function(ip, i) {
-        html += '<tr><td>' + (i+1) + '</td><td style="font-family:monospace">' + ip + '</td><td><button class="btn danger-btn btn-icon" onclick="removePoolIp(\'' + ip.replace(/'/g, "\\'") + '\')">X</button></td></tr>';
+    var html = '<table><thead><tr><th>#</th><th>IP 地址</th><th>来源</th><th style="width:80px;">操作</th></tr></thead><tbody>';
+    data.forEach(function(item, i) {
+        var sourceLabel = item.source === 'manual' ? '手动池' : 'API 池';
+        html += '<tr><td>' + (i+1) + '</td><td style="font-family:monospace">' + item.ip + '</td><td>' + sourceLabel + '</td><td><button class="btn danger-btn btn-icon" onclick="removePoolIp(\'' + item.ip.replace(/'/g, "\\'") + '\', \'' + item.source + '\')">X</button></td></tr>';
     });
     html += '</tbody></table>';
     document.getElementById('ippool-list').innerHTML = html;
 }
 
 function enterPoolEditMode() {
-    var data = allIpPoolData[currentIspTab] || [];
-    document.getElementById('pool-edit-textarea').value = data.join('\n');
+    var pool = allIpPoolData[currentIspTab] || { manualIps: [] };
+    document.getElementById('pool-edit-textarea').value = (pool.manualIps || []).join('\n');
     document.getElementById('pool-edit-textarea').style.display = 'block';
     document.getElementById('save-pool-edit-btn').style.display = 'inline-block';
     document.getElementById('cancel-pool-edit-btn').style.display = 'inline-block';
@@ -1894,7 +1914,7 @@ function savePoolEditMode() {
     var ips = raw ? raw.split(/[\n,;\s]+/).filter(Boolean) : [];
     api('/api/ippool/replace', 'POST', { isp: currentIspTab, ips: ips }).then(function(r) {
         if (r.success) {
-            toast('当前池已保存');
+            toast('手动 IP 池已保存');
             cancelPoolEditMode();
             loadIpPool();
         } else {
@@ -1903,9 +1923,8 @@ function savePoolEditMode() {
     });
 }
 
-function removePoolIp(ip) {
-    var data = (allIpPoolData[currentIspTab] || []).filter(function(x) { return x !== ip; });
-    api('/api/ippool/replace', 'POST', { isp: currentIspTab, ips: data }).then(function(r) {
+function removePoolIp(ip, source) {
+    api('/api/ippool/remove', 'POST', { isp: currentIspTab, ip: ip, source: source }).then(function(r) {
         if (r.success) {
             toast('IP 已删除');
             loadIpPool();
@@ -2109,6 +2128,7 @@ function loadConfig() {
         document.getElementById('cfg-client-proxy-mode').value = c.clientProxyMode || 'direct';
         document.getElementById('cfg-client-proxy-url').value = c.clientProxyUrl || '';
         syncClientProxyMode();
+        syncCleanupToggle();
         document.getElementById('cfg-client-update-enabled').value = c.clientUpdateEnabled ? 'true' : 'false';
         document.getElementById('cfg-client-update-source-type').value = c.clientUpdateSourceType || 'github';
         document.getElementById('cfg-latest-client-version').value = c.latestClientVersion || '';
