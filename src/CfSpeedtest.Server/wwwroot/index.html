@@ -992,6 +992,17 @@ function fmtTime(s) {
     return d.toLocaleString('zh-CN');
 }
 
+function fmtSegmentLabel(s) {
+    if (!s || !s.from || !s.to) return '-';
+    var from = new Date(s.from);
+    var to = new Date(s.to);
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) return s.label || '-';
+    var date = from.toLocaleDateString('zh-CN');
+    var fromTime = from.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    var toTime = to.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    return date + ' ' + fromTime + ' ~ ' + toTime;
+}
+
 function showLoginOverlay(show) {
     var overlay = document.getElementById('login-overlay');
     if (!overlay) return;
@@ -1346,7 +1357,7 @@ function loadHistory() {
         sel.innerHTML = '<option value="">-- 全部记录 --</option>';
         historySegments.forEach(function(s) {
             var val = s.from + '|' + s.to;
-            sel.innerHTML += '<option value="' + val + '">' + s.label + ' (' + s.count + '条)</option>';
+            sel.innerHTML += '<option value="' + val + '">' + fmtSegmentLabel(s) + ' (' + s.count + '条)</option>';
         });
         if (selectedHistorySegment) {
             sel.value = selectedHistorySegment;
@@ -2299,7 +2310,7 @@ function loadDnsSegments() {
         sel.innerHTML = '<option value="">最新一次测速（默认）</option>';
         segments.forEach(function(s) {
             var val = s.from + '|' + s.to;
-            sel.innerHTML += '<option value="' + val + '">' + s.label + ' (' + s.count + '条)</option>';
+            sel.innerHTML += '<option value="' + val + '">' + fmtSegmentLabel(s) + ' (' + s.count + '条)</option>';
         });
         if (selectedDnsSegment) {
             sel.value = selectedDnsSegment;

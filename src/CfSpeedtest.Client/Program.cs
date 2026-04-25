@@ -205,6 +205,7 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     var testedIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var pendingIps = new Queue<string>(task.IpAddresses);
     var maxTestIpCount = Math.Max(task.IpAddresses.Count, task.MaxTestIpCount);
+    var currentBatchRemaining = pendingIps.Count;
     Console.WriteLine($"MaxTestIpCount: {maxTestIpCount} (server={task.MaxTestIpCount}, batch={task.IpAddresses.Count})");
     runtimeState.AppendLog($"MaxTestIpCount={maxTestIpCount}");
     runtimeState.SetTesting(maxTestIpCount, 0);
@@ -220,6 +221,7 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         var ip = pendingIps.Dequeue();
         if (!testedIps.Add(ip))
             continue;
+        currentBatchRemaining--;
 
         runtimeState.SetTesting(maxTestIpCount, testedIps.Count - 1);
 
@@ -239,35 +241,35 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
             runtimeState.AppendLog($"{ip} skipped due to high loss");
             result.Score = 0;
             allResults.Add(result);
-            continue;
         }
+        else
+        {
+            // 2b. 下载速度测试
+            await TestDownloadAsync(result, ip, task.TestUrl, task.TestHost, task.TestPort, task.DownloadDurationSeconds, task.MaxDownloadSpeedKBps, transportState.ProxySettings);
+            Console.Write($"DL: {result.DownloadSpeedKBps,8:F1} KB/s | ");
 
-        // 2b. 下载速度测试
-        await TestDownloadAsync(result, ip, task.TestUrl, task.TestHost, task.TestPort, task.DownloadDurationSeconds, task.MaxDownloadSpeedKBps, transportState.ProxySettings);
-        Console.Write($"DL: {result.DownloadSpeedKBps,8:F1} KB/s | ");
+            // 2c. 综合评分: 速度权重60%, 延迟权重25%, 丢包权重15%
+            var speedScore = Math.Min(result.DownloadSpeedKBps / 1000.0, 100.0); // 归一化到0-100
+            var latencyScore = Math.Max(0, 100.0 - result.AvgLatencyMs);         // 延迟越低越好
+            var lossScore = (1.0 - result.PacketLossRate) * 100.0;               // 丢包越少越好
+            result.Score = speedScore * 0.60 + latencyScore * 0.25 + lossScore * 0.15;
 
-        // 2c. 综合评分: 速度权重60%, 延迟权重25%, 丢包权重15%
-        var speedScore = Math.Min(result.DownloadSpeedKBps / 1000.0, 100.0); // 归一化到0-100
-        var latencyScore = Math.Max(0, 100.0 - result.AvgLatencyMs);         // 延迟越低越好
-        var lossScore = (1.0 - result.PacketLossRate) * 100.0;               // 丢包越少越好
-        result.Score = speedScore * 0.60 + latencyScore * 0.25 + lossScore * 0.15;
-
-        Console.WriteLine($"Score: {result.Score:F1}");
-        runtimeState.AppendLog($"{ip} TCP={result.AvgLatencyMs:F1}ms loss={result.PacketLossRate:P1} DL={result.DownloadSpeedKBps:F1}KB/s Score={result.Score:F1}");
-        allResults.Add(result);
+            Console.WriteLine($"Score: {result.Score:F1}");
+            runtimeState.AppendLog($"{ip} TCP={result.AvgLatencyMs:F1}ms loss={result.PacketLossRate:P1} DL={result.DownloadSpeedKBps:F1}KB/s Score={result.Score:F1}");
+            allResults.Add(result);
+        }
         runtimeState.SetTesting(maxTestIpCount, testedIps.Count);
 
-        // 达标检查：每测完一个 IP 就检查，够了直接停
-        var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
-        if (qualifiedCount >= task.TopN)
+        // 当前批次测完后再判断是否达标，避免一测到 TopN 个就提前结束本批次
+        if (currentBatchRemaining == 0 && pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
         {
-            runtimeState.AppendLog($"Qualified count ({qualifiedCount}) >= TopN ({task.TopN}), stopping");
-            break;
-        }
+            var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
+            if (qualifiedCount >= task.TopN)
+            {
+                runtimeState.AppendLog($"Batch completed and qualified count ({qualifiedCount}) >= TopN ({task.TopN}), stopping");
+                break;
+            }
 
-        // 队列为空时尝试补拉
-        if (pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
-        {
             var additionalIps = await FetchAdditionalIpsAsync(serverUrl, clientId, runtimeProfile.Isp, testedIps, transportState.HttpClient);
             runtimeState.AppendLog($"Requested additional IP batch, received {additionalIps.Count} IP(s)");
             foreach (var extraIp in additionalIps)
@@ -275,6 +277,7 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
                 if (!testedIps.Contains(extraIp))
                     pendingIps.Enqueue(extraIp);
             }
+            currentBatchRemaining = pendingIps.Count;
         }
         else if (pendingIps.Count == 0 && testedIps.Count >= maxTestIpCount)
         {
