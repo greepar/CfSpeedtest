@@ -324,13 +324,40 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         CompletedAt = DateTime.UtcNow,
     };
     var reportJson = JsonSerializer.Serialize(report, AppJsonContext.Default.SpeedTestReport);
-    var reportResp = await transportState.HttpClient.PostAsync(
-        $"{serverUrl}/api/report",
-        new StringContent(reportJson, Encoding.UTF8, "application/json"));
-    reportResp.EnsureSuccessStatusCode();
+    await PostReportWithRetryAsync(serverUrl, reportJson, transportState, runtimeState);
     Console.WriteLine("OK");
     runtimeState.SetCompleted(task.IpAddresses.Count, topResults.Count);
     runtimeState.AppendLog("Report completed successfully");
+}
+
+static async Task PostReportWithRetryAsync(string serverUrl, string reportJson, ClientTransportState transportState, ClientRuntimeState runtimeState)
+{
+    const int maxAttempts = 3;
+    Exception? lastError = null;
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        try
+        {
+            using var reportResp = await transportState.HttpClient.PostAsync(
+                $"{serverUrl}/api/report",
+                new StringContent(reportJson, Encoding.UTF8, "application/json"));
+            reportResp.EnsureSuccessStatusCode();
+            return;
+        }
+        catch (Exception ex) when (attempt < maxAttempts)
+        {
+            lastError = ex;
+            runtimeState.AppendLog($"Report attempt {attempt}/{maxAttempts} failed: {ex.Message}, retrying...");
+            await Task.Delay(TimeSpan.FromSeconds(3));
+        }
+        catch (Exception ex)
+        {
+            lastError = ex;
+        }
+    }
+
+    throw new InvalidOperationException($"Report failed after {maxAttempts} attempts: {lastError?.Message}", lastError);
 }
 
 static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
