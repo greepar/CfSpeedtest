@@ -260,13 +260,13 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         }
         runtimeState.SetTesting(maxTestIpCount, testedIps.Count);
 
-        // 当前批次测完后再判断是否达标，避免一测到 TopN 个就提前结束本批次
+        // 当前批次测完后再判断是否达标；只要已有达标结果就停止，不继续拉下一批
         if (currentBatchRemaining == 0 && pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
         {
             var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
-            if (qualifiedCount >= task.TopN)
+            if (qualifiedCount > 0)
             {
-                runtimeState.AppendLog($"Batch completed and qualified count ({qualifiedCount}) >= TopN ({task.TopN}), stopping");
+                runtimeState.AppendLog($"Batch completed and found {qualifiedCount} qualified result(s), stopping");
                 break;
             }
 
