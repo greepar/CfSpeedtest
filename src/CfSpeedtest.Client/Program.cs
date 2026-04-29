@@ -610,11 +610,7 @@ static Task StartHeartbeatLoopAsync(
                     }
 
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
-                    if (nextIntervalSeconds != intervalSeconds)
-                    {
-                        intervalSeconds = nextIntervalSeconds;
-                        break;
-                    }
+                    intervalSeconds = nextIntervalSeconds;
                 }
             }
             catch (OperationCanceledException)
@@ -645,12 +641,14 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
     SemaphoreSlim immediateFetchSignal,
     CancellationToken cancellationToken)
 {
+    var connected = false;
     try
     {
         using var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
         var wsUrl = BuildWebSocketUrl(serverUrl, clientId, runtimeProfile.Isp);
         await ws.ConnectAsync(new Uri(wsUrl), cancellationToken);
+        connected = true;
         Console.WriteLine("WebSocket heartbeat connected.");
 
         var intervalSeconds = 30;
@@ -706,8 +704,18 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
         Console.WriteLine("WebSocket heartbeat disconnected.");
         return 1;
     }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        throw;
+    }
     catch (Exception ex)
     {
+        if (connected)
+        {
+            Console.WriteLine($"WebSocket heartbeat disconnected: {ex.Message}");
+            return 1;
+        }
+
         Console.WriteLine($"WebSocket heartbeat unavailable: {ex.Message}");
         return 0;
     }
