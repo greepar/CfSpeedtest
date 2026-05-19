@@ -16,6 +16,8 @@ public class DataStore
     private ServerConfig _config = new();
     private readonly ConcurrentDictionary<string, ClientInfo> _clients = new();
     private readonly ConcurrentBag<TestHistory> _history = [];
+    private readonly ConcurrentDictionary<string, BootstrapToken> _bootstrapTokens = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _clientIdToToken = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, List<string>> _apiIpPools = new()
     {
         ["Telecom"] = [],
@@ -280,6 +282,90 @@ public class DataStore
         return true;
     }
 
+    // ===== Bootstrap Tokens =====
+    public BootstrapToken? GetBootstrapToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        return _bootstrapTokens.TryGetValue(token, out var t) ? t : null;
+    }
+
+    public List<BootstrapToken> GetBootstrapTokens()
+    {
+        lock (_lock) return [.. _bootstrapTokens.Values];
+    }
+
+    public void UpsertBootstrapToken(BootstrapToken token)
+    {
+        if (string.IsNullOrWhiteSpace(token.Token)) return;
+        _bootstrapTokens[token.Token] = token;
+        if (!string.IsNullOrWhiteSpace(token.ClientId))
+        {
+            _clientIdToToken[token.ClientId] = token.Token;
+        }
+        PersistFile("bootstrap-tokens.json", _bootstrapTokens.Values.ToList());
+    }
+
+    public bool RemoveBootstrapToken(string token)
+    {
+        var removed = _bootstrapTokens.TryRemove(token, out var t);
+        if (removed && t is not null && !string.IsNullOrWhiteSpace(t.ClientId))
+        {
+            _clientIdToToken.TryRemove(t.ClientId, out _);
+        }
+        if (removed)
+        {
+            PersistFile("bootstrap-tokens.json", _bootstrapTokens.Values.ToList());
+        }
+        return removed;
+    }
+
+    /// <summary>
+    /// 客户端首次上线时，把对应 token 标记为 Consumed。
+    /// </summary>
+    public bool MarkBootstrapTokenConsumedByClient(string clientId)
+    {
+        if (string.IsNullOrWhiteSpace(clientId)) return false;
+        if (!_clientIdToToken.TryGetValue(clientId, out var token)) return false;
+        if (!_bootstrapTokens.TryGetValue(token, out var info)) return false;
+        if (info.Consumed) return false;
+
+        info.Consumed = true;
+        info.ConsumedAtUtc = DateTime.UtcNow;
+        _bootstrapTokens[token] = info;
+        PersistFile("bootstrap-tokens.json", _bootstrapTokens.Values.ToList());
+        return true;
+    }
+
+    /// <summary>
+    /// 删除已过期或已使用且超过 24 小时的 token，避免文件无限增长。
+    /// </summary>
+    public int CleanupBootstrapTokens()
+    {
+        var now = DateTime.UtcNow;
+        var staleCutoff = now.AddHours(-24);
+        var toRemove = _bootstrapTokens.Values
+            .Where(t =>
+                (t.Consumed && t.ConsumedAtUtc.HasValue && t.ConsumedAtUtc.Value < staleCutoff) ||
+                (!t.Consumed && t.ExpiresAtUtc < now.AddHours(-24)))
+            .Select(t => t.Token)
+            .ToList();
+
+        foreach (var token in toRemove)
+        {
+            if (_bootstrapTokens.TryRemove(token, out var t) && !string.IsNullOrWhiteSpace(t.ClientId))
+            {
+                _clientIdToToken.TryRemove(t.ClientId, out _);
+            }
+        }
+
+        if (toRemove.Count > 0)
+        {
+            PersistFile("bootstrap-tokens.json", _bootstrapTokens.Values.ToList());
+        }
+
+        return toRemove.Count;
+    }
+
     // ===== History =====
     public List<TestHistory> GetHistory(int limit = 100)
     {
@@ -423,6 +509,20 @@ public class DataStore
             if (LoadFile("ippool.json", ref apiPools))
             {
                 _apiIpPools = apiPools;
+            }
+
+            var tokens = new List<BootstrapToken>();
+            if (LoadFile("bootstrap-tokens.json", ref tokens))
+            {
+                foreach (var t in tokens)
+                {
+                    if (string.IsNullOrWhiteSpace(t.Token)) continue;
+                    _bootstrapTokens[t.Token] = t;
+                    if (!string.IsNullOrWhiteSpace(t.ClientId))
+                    {
+                        _clientIdToToken[t.ClientId] = t.Token;
+                    }
+                }
             }
         }
         catch (Exception ex)

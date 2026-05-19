@@ -292,6 +292,100 @@ public class WebUiAuthConfig
     public List<WebUiSessionInfo> Sessions { get; set; } = [];
 }
 
+/// <summary>
+/// 一键部署 Bootstrap Token：内含一组待部署节点的全部安装参数，单次绑定，30 分钟过期。
+/// </summary>
+public class BootstrapToken
+{
+    /// <summary>短码 token（命令里的 /i/{token}）</summary>
+    public string Token { get; set; } = string.Empty;
+
+    /// <summary>预生成的 clientId，会写入 client 白名单</summary>
+    public string ClientId { get; set; } = string.Empty;
+
+    public IspType Isp { get; set; }
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>客户端回连服务端时使用的 URL（默认取请求 Origin）</summary>
+    public string ServerUrl { get; set; } = string.Empty;
+
+    /// <summary>是否随安装命令带入 GH Proxy 前缀</summary>
+    public bool IncludeProxy { get; set; } = true;
+
+    /// <summary>是否禁用客户端自动更新</summary>
+    public bool DisableAutoUpdate { get; set; }
+
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAtUtc { get; set; } = DateTime.UtcNow.AddMinutes(30);
+
+    /// <summary>该 token 已被某个 client 上线消费，永久作废</summary>
+    public bool Consumed { get; set; }
+
+    /// <summary>客户端首次上线时间（消费时点）</summary>
+    public DateTime? ConsumedAtUtc { get; set; }
+}
+
+/// <summary>
+/// 创建 Bootstrap Token 的请求
+/// </summary>
+public class BootstrapTokenCreateRequest
+{
+    /// <summary>客户端备注名，可空。空时自动生成</summary>
+    public string? Name { get; set; }
+
+    /// <summary>运营商，默认 Telecom</summary>
+    public string? Isp { get; set; }
+
+    /// <summary>服务端地址（客户端回连地址），可空。空时使用请求 Origin</summary>
+    public string? ServerUrl { get; set; }
+
+    /// <summary>是否携带 GH Proxy 前缀</summary>
+    public bool IncludeProxy { get; set; } = true;
+
+    /// <summary>是否禁用自动更新</summary>
+    public bool DisableAutoUpdate { get; set; }
+
+    /// <summary>
+    /// 复用已有客户端的 clientId（编辑/重新生成命令时传入）。
+    /// 若为空则新建一个 clientId 并加入白名单。
+    /// </summary>
+    public string? ClientId { get; set; }
+}
+
+/// <summary>
+/// 创建 Bootstrap Token 的响应
+/// </summary>
+public class BootstrapTokenCreateResponse
+{
+    public string Token { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public IspType Isp { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public DateTime ExpiresAtUtc { get; set; }
+    public string ServerUrl { get; set; } = string.Empty;
+
+    /// <summary>Linux / macOS 一行命令</summary>
+    public string LinuxCommand { get; set; } = string.Empty;
+
+    /// <summary>Windows PowerShell 一行命令</summary>
+    public string WindowsCommand { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// 查询 Bootstrap Token 状态的响应（前端轮询用）
+/// </summary>
+public class BootstrapTokenStatus
+{
+    public string Token { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public bool Online { get; set; }
+    public bool Consumed { get; set; }
+    public bool Expired { get; set; }
+    public DateTime ExpiresAtUtc { get; set; }
+    public DateTime? LastSeenAtUtc { get; set; }
+    public string? RuntimeStatus { get; set; }
+}
+
 public class WebUiSessionInfo
 {
     public string Token { get; set; } = string.Empty;

@@ -121,6 +121,7 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
         Allowed = existing?.Allowed ?? true,
     };
     store.UpsertClient(info);
+    store.MarkBootstrapTokenConsumedByClient(clientId);
 
     return ApiResponse<ClientRegisterResponse>.Ok(new ClientRegisterResponse
     {
@@ -174,6 +175,7 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
     store.UpsertClient(client);
+    store.MarkBootstrapTokenConsumedByClient(client.ClientId);
 
     return ApiResponse<ClientHeartbeatResponse>.Ok(new ClientHeartbeatResponse
     {
@@ -249,6 +251,7 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
             client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
     store.UpsertClient(client);
+    store.MarkBootstrapTokenConsumedByClient(client.ClientId);
 
             var response = new ClientWsMessage
             {
@@ -438,6 +441,169 @@ app.MapPost("/api/client/install-script", (ClientInstallScriptRequest req, DataS
     return response is null
         ? ApiResponse<ClientInstallScriptResponse>.Fail("无法生成命令，请先检查更新源配置")
         : ApiResponse<ClientInstallScriptResponse>.Ok(response);
+});
+
+// ============================================================
+//  API: 一键部署 - 创建 Bootstrap Token
+// ============================================================
+app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequest req, DataStore store) =>
+{
+    var ispStr = string.IsNullOrWhiteSpace(req.Isp) ? "Telecom" : req.Isp.Trim();
+    if (!Enum.TryParse<IspType>(ispStr, true, out var isp))
+        return ApiResponse<BootstrapTokenCreateResponse>.Fail("Invalid ISP");
+
+    store.CleanupBootstrapTokens();
+
+    string clientId;
+    string name;
+    var reuseExisting = false;
+
+    if (!string.IsNullOrWhiteSpace(req.ClientId))
+    {
+        var existing = store.GetClient(req.ClientId.Trim());
+        if (existing is null)
+            return ApiResponse<BootstrapTokenCreateResponse>.Fail("ClientId not found");
+        if (!existing.Allowed)
+            return ApiResponse<BootstrapTokenCreateResponse>.Fail("Client is not allowed");
+
+        clientId = existing.ClientId;
+        // 编辑请求里若带了新的 name/isp，把数据库一起改了
+        var newName = string.IsNullOrWhiteSpace(req.Name) ? existing.Name : req.Name.Trim();
+        if (!string.Equals(existing.Name, newName, StringComparison.Ordinal) || existing.Isp != isp)
+        {
+            store.UpdateClientMetadata(clientId, isp, string.IsNullOrWhiteSpace(newName) ? $"{isp}-{clientId[..6]}" : newName);
+        }
+        name = string.IsNullOrWhiteSpace(newName) ? $"{isp}-{clientId[..6]}" : newName;
+        reuseExisting = true;
+    }
+    else
+    {
+        clientId = Guid.NewGuid().ToString("N");
+        name = string.IsNullOrWhiteSpace(req.Name)
+            ? $"{isp}-{clientId[..6]}"
+            : req.Name.Trim();
+
+        var info = new ClientInfo
+        {
+            ClientId = clientId,
+            Isp = isp,
+            Name = name,
+            RegisteredAt = DateTime.UtcNow,
+            LastSeenAt = DateTime.MinValue,
+            IsOnline = false,
+            Allowed = true,
+        };
+        store.UpsertClient(info);
+    }
+
+    var serverUrl = string.IsNullOrWhiteSpace(req.ServerUrl)
+        ? $"{http.Request.Scheme}://{http.Request.Host}"
+        : req.ServerUrl.Trim().TrimEnd('/');
+
+    var token = GenerateBootstrapTokenCode(store);
+
+    var record = new BootstrapToken
+    {
+        Token = token,
+        ClientId = clientId,
+        Isp = isp,
+        Name = name,
+        ServerUrl = serverUrl,
+        IncludeProxy = req.IncludeProxy,
+        DisableAutoUpdate = req.DisableAutoUpdate,
+        CreatedAtUtc = DateTime.UtcNow,
+        ExpiresAtUtc = DateTime.UtcNow.AddMinutes(30),
+        Consumed = false,
+    };
+    store.UpsertBootstrapToken(record);
+
+    var publicBase = $"{http.Request.Scheme}://{http.Request.Host}";
+    var linuxCmd = $"curl -Ls {publicBase}/i/{token} | bash";
+    var windowsCmd = $"irm {publicBase}/i/{token} | iex";
+
+    return ApiResponse<BootstrapTokenCreateResponse>.Ok(new BootstrapTokenCreateResponse
+    {
+        Token = token,
+        ClientId = clientId,
+        Isp = isp,
+        Name = name,
+        ExpiresAtUtc = record.ExpiresAtUtc,
+        ServerUrl = serverUrl,
+        LinuxCommand = linuxCmd,
+        WindowsCommand = windowsCmd,
+    });
+});
+
+// ============================================================
+//  API: 一键部署 - 查询 Token 状态（前端轮询用）
+// ============================================================
+app.MapGet("/api/bootstrap/{token}/status", (string token, DataStore store) =>
+{
+    var record = store.GetBootstrapToken(token);
+    if (record is null)
+        return ApiResponse<BootstrapTokenStatus>.Fail("Token not found");
+
+    var client = store.GetClient(record.ClientId);
+    var online = false;
+    string? runtimeStatus = null;
+    DateTime? lastSeen = null;
+    if (client is not null)
+    {
+        runtimeStatus = client.RuntimeStatus;
+        lastSeen = client.LastSeenAt == DateTime.MinValue ? null : client.LastSeenAt;
+        online = client.IsOnline && client.LastSeenAt != DateTime.MinValue
+                 && (DateTime.UtcNow - client.LastSeenAt) < TimeSpan.FromMinutes(2);
+    }
+
+    return ApiResponse<BootstrapTokenStatus>.Ok(new BootstrapTokenStatus
+    {
+        Token = record.Token,
+        ClientId = record.ClientId,
+        Online = online,
+        Consumed = record.Consumed,
+        Expired = !record.Consumed && DateTime.UtcNow > record.ExpiresAtUtc,
+        ExpiresAtUtc = record.ExpiresAtUtc,
+        LastSeenAtUtc = lastSeen,
+        RuntimeStatus = runtimeStatus,
+    });
+});
+
+// ============================================================
+//  /i/{token} - 公开端点，按 User-Agent 返回平台对应的一行命令脚本
+// ============================================================
+app.MapGet("/i/{token}", (HttpContext http, string token, DataStore store) =>
+{
+    var record = store.GetBootstrapToken(token);
+    if (record is null)
+    {
+        http.Response.StatusCode = StatusCodes.Status404NotFound;
+        return Results.Text("# Bootstrap token not found or already revoked\n", "text/plain", System.Text.Encoding.UTF8);
+    }
+
+    if (!record.Consumed && DateTime.UtcNow > record.ExpiresAtUtc)
+    {
+        http.Response.StatusCode = StatusCodes.Status410Gone;
+        return Results.Text("# Bootstrap token expired\n", "text/plain", System.Text.Encoding.UTF8);
+    }
+
+    var config = store.GetConfig();
+    var ua = http.Request.Headers.UserAgent.ToString() ?? string.Empty;
+    var forcePs = http.Request.Query.ContainsKey("ps") || http.Request.Query.ContainsKey("powershell");
+    var forceSh = http.Request.Query.ContainsKey("sh") || http.Request.Query.ContainsKey("bash");
+
+    var isWindows = forcePs || (!forceSh && (
+        ua.Contains("PowerShell", StringComparison.OrdinalIgnoreCase) ||
+        ua.Contains("WindowsPowerShell", StringComparison.OrdinalIgnoreCase) ||
+        ua.Contains("Microsoft.PowerShell", StringComparison.OrdinalIgnoreCase) ||
+        ua.Contains("WindowsTerminal", StringComparison.OrdinalIgnoreCase) ||
+        ua.Contains("Windows NT", StringComparison.OrdinalIgnoreCase)));
+
+    var script = isWindows
+        ? BuildBootstrapPowerShellScript(record, config)
+        : BuildBootstrapBashScript(record, config);
+
+    var contentType = isWindows ? "text/plain; charset=utf-8" : "text/x-shellscript; charset=utf-8";
+    return Results.Text(script, contentType, System.Text.Encoding.UTF8);
 });
 
 app.MapGet("/api/auth/status", (HttpContext http, DataStore store, WebUiAuthService auth) =>
@@ -1193,5 +1359,187 @@ static bool RequiresWebUiAuth(PathString path)
         value.StartsWith("/install/client/", StringComparison.OrdinalIgnoreCase))
         return false;
 
+    if (value.StartsWith("/i/", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    if (value.StartsWith("/api/bootstrap/", StringComparison.OrdinalIgnoreCase) &&
+        value.EndsWith("/status", StringComparison.OrdinalIgnoreCase))
+        return false;
+
     return value.StartsWith("/api/", StringComparison.OrdinalIgnoreCase);
+}
+
+static string GenerateBootstrapTokenCode(DataStore store)
+{
+    const string Alphabet = "abcdefghijkmnpqrstuvwxyz23456789";
+    var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+    var buffer = new byte[8];
+    for (var attempt = 0; attempt < 32; attempt++)
+    {
+        rng.GetBytes(buffer);
+        var sb = new System.Text.StringBuilder(8);
+        for (var i = 0; i < 8; i++)
+        {
+            sb.Append(Alphabet[buffer[i] % Alphabet.Length]);
+        }
+        var token = sb.ToString();
+        if (store.GetBootstrapToken(token) is null) return token;
+    }
+
+    // Fallback: use guid suffix if collision space exhausted (shouldn't happen)
+    return Guid.NewGuid().ToString("N")[..12];
+}
+
+static string BuildBootstrapBashScript(BootstrapToken token, ServerConfig config)
+{
+    var serverUrl = string.IsNullOrWhiteSpace(token.ServerUrl) ? "" : token.ServerUrl.Trim().TrimEnd('/');
+    var clientId = token.ClientId;
+    var isp = token.Isp.ToString();
+    var name = string.IsNullOrWhiteSpace(token.Name) ? $"{isp}-{clientId[..6]}" : token.Name;
+    var repository = config.ClientUpdateRepository.Trim();
+    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
+
+    if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    {
+        return "#!/usr/bin/env bash\necho '[CfSpeedtest] 服务端未配置 GitHub 仓库或 Release Tag，无法部署' >&2\nexit 1\n";
+    }
+
+    var scriptFile = "install-cfspeedtest-client-linux.sh";
+    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{scriptFile}";
+    var scriptUrl = (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
+        ? CombineProxyUrl(ghProxyPrefix, rawUrl)
+        : rawUrl;
+
+    var args = new List<string>
+    {
+        "--server " + ShellQuote(serverUrl),
+        "--client-id " + ShellQuote(clientId),
+        "--isp " + ShellQuote(isp),
+        "--name " + ShellQuote(name),
+        "--repository " + ShellQuote(repository),
+        "--release-tag " + ShellQuote(releaseTag),
+    };
+
+    if (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
+    {
+        args.Add("--gh-proxy-prefix " + ShellQuote(ghProxyPrefix));
+    }
+
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine("#!/usr/bin/env bash");
+    sb.AppendLine("# CfSpeedtest one-click bootstrap installer");
+    sb.AppendLine("# Token: " + token.Token);
+    sb.AppendLine("# Generated: " + DateTime.UtcNow.ToString("u"));
+    sb.AppendLine("set -e");
+    sb.AppendLine();
+    sb.AppendLine("if [ \"${EUID:-$(id -u)}\" -ne 0 ]; then");
+    sb.AppendLine("  if command -v sudo >/dev/null 2>&1; then");
+    sb.AppendLine("    SUDO=sudo");
+    sb.AppendLine("  else");
+    sb.AppendLine("    echo '[CfSpeedtest] 需要 root 权限，请使用 sudo 执行' >&2");
+    sb.AppendLine("    exit 1");
+    sb.AppendLine("  fi");
+    sb.AppendLine("else");
+    sb.AppendLine("  SUDO=");
+    sb.AppendLine("fi");
+    sb.AppendLine();
+    sb.AppendLine("UNAME_S=\"$(uname -s 2>/dev/null || echo Linux)\"");
+    sb.AppendLine($"SCRIPT_URL_LINUX={ShellQuote(scriptUrl)}");
+    var macScriptFile = "install-cfspeedtest-client-macos.sh";
+    var macRaw = $"https://github.com/{repository}/releases/download/{releaseTag}/{macScriptFile}";
+    var macUrl = (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
+        ? CombineProxyUrl(ghProxyPrefix, macRaw)
+        : macRaw;
+    sb.AppendLine($"SCRIPT_URL_MACOS={ShellQuote(macUrl)}");
+    sb.AppendLine();
+    sb.AppendLine("if [ \"$UNAME_S\" = \"Darwin\" ]; then");
+    sb.AppendLine("  SCRIPT_URL=\"$SCRIPT_URL_MACOS\"");
+    sb.AppendLine("else");
+    sb.AppendLine("  SCRIPT_URL=\"$SCRIPT_URL_LINUX\"");
+    sb.AppendLine("fi");
+    sb.AppendLine();
+    sb.AppendLine("if command -v curl >/dev/null 2>&1; then");
+    sb.AppendLine("  FETCH=\"curl -fsSL\"");
+    sb.AppendLine("elif command -v wget >/dev/null 2>&1; then");
+    sb.AppendLine("  FETCH=\"wget -qO-\"");
+    sb.AppendLine("else");
+    sb.AppendLine("  echo '[CfSpeedtest] 需要 curl 或 wget' >&2");
+    sb.AppendLine("  exit 1");
+    sb.AppendLine("fi");
+    sb.AppendLine();
+    sb.AppendLine("echo \"[CfSpeedtest] 拉取安装脚本: $SCRIPT_URL\"");
+    sb.AppendLine("$FETCH \"$SCRIPT_URL\" | $SUDO bash -s -- \\");
+    for (var i = 0; i < args.Count; i++)
+    {
+        var line = "  " + args[i];
+        if (i < args.Count - 1) line += " \\";
+        sb.AppendLine(line);
+    }
+    sb.AppendLine();
+    return sb.ToString();
+}
+
+static string BuildBootstrapPowerShellScript(BootstrapToken token, ServerConfig config)
+{
+    var serverUrl = string.IsNullOrWhiteSpace(token.ServerUrl) ? "" : token.ServerUrl.Trim().TrimEnd('/');
+    var clientId = token.ClientId;
+    var isp = token.Isp.ToString();
+    var name = string.IsNullOrWhiteSpace(token.Name) ? $"{isp}-{clientId[..6]}" : token.Name;
+    var repository = config.ClientUpdateRepository.Trim();
+    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
+
+    if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    {
+        return "Write-Error '[CfSpeedtest] 服务端未配置 GitHub 仓库或 Release Tag，无法部署'\nexit 1\n";
+    }
+
+    var scriptFile = "install-cfspeedtest-client-windows.ps1";
+    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{scriptFile}";
+    var scriptUrl = (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
+        ? CombineProxyUrl(ghProxyPrefix, rawUrl)
+        : rawUrl;
+
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine("# CfSpeedtest one-click bootstrap installer");
+    sb.AppendLine("# Token: " + token.Token);
+    sb.AppendLine("# Generated: " + DateTime.UtcNow.ToString("u"));
+    sb.AppendLine("$ErrorActionPreference = 'Stop'");
+    sb.AppendLine($"$ScriptUrl = {PsSingleQuote(scriptUrl)}");
+    sb.AppendLine($"$ServerUrl = {PsSingleQuote(serverUrl)}");
+    sb.AppendLine($"$ClientId  = {PsSingleQuote(clientId)}");
+    sb.AppendLine($"$Isp       = {PsSingleQuote(isp)}");
+    sb.AppendLine($"$ClientName= {PsSingleQuote(name)}");
+    sb.AppendLine($"$Repository= {PsSingleQuote(repository)}");
+    sb.AppendLine($"$ReleaseTag= {PsSingleQuote(releaseTag)}");
+    if (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
+    {
+        sb.AppendLine($"$GhProxyPrefix = {PsSingleQuote(ghProxyPrefix)}");
+    }
+    else
+    {
+        sb.AppendLine("$GhProxyPrefix = ''");
+    }
+    sb.AppendLine();
+    sb.AppendLine("Write-Host \"[CfSpeedtest] 拉取安装脚本: $ScriptUrl\"");
+    sb.AppendLine("$tmp = Join-Path $env:TEMP 'install-cfspeedtest-client.ps1'");
+    sb.AppendLine("Invoke-WebRequest -Uri $ScriptUrl -OutFile $tmp -UseBasicParsing");
+    sb.AppendLine();
+    sb.AppendLine("$psArgs = @(");
+    sb.AppendLine("    '-NoProfile','-ExecutionPolicy','Bypass','-File',$tmp,");
+    sb.AppendLine("    '-ServerUrl',$ServerUrl,");
+    sb.AppendLine("    '-ClientId',$ClientId,");
+    sb.AppendLine("    '-Isp',$Isp,");
+    sb.AppendLine("    '-ClientName',$ClientName,");
+    sb.AppendLine("    '-Repository',$Repository,");
+    sb.AppendLine("    '-ReleaseTag',$ReleaseTag");
+    sb.AppendLine(")");
+    sb.AppendLine("if (-not [string]::IsNullOrWhiteSpace($GhProxyPrefix)) {");
+    sb.AppendLine("    $psArgs += @('-GhProxyPrefix',$GhProxyPrefix)");
+    sb.AppendLine("}");
+    sb.AppendLine();
+    sb.AppendLine("& powershell.exe @psArgs");
+    sb.AppendLine("exit $LASTEXITCODE");
+    return sb.ToString();
 }

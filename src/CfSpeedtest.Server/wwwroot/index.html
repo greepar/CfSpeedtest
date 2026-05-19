@@ -344,6 +344,166 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
     .segmented { width: 100%; }
     .segmented .tab { min-width: 0; }
 }
+
+/* Bootstrap one-click deploy modal */
+.bootstrap-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.55;
+    margin-bottom: 16px;
+    border: 1px solid transparent;
+}
+.bootstrap-banner.bootstrap-waiting {
+    background: rgba(34, 197, 94, .08);
+    border-color: rgba(34, 197, 94, .35);
+    color: #d4f4dd;
+}
+.bootstrap-banner.bootstrap-online {
+    background: rgba(34, 197, 94, .18);
+    border-color: rgba(34, 197, 94, .55);
+    color: #bbf7d0;
+}
+.bootstrap-banner.bootstrap-error {
+    background: rgba(239, 68, 68, .12);
+    border-color: rgba(239, 68, 68, .45);
+    color: #fecaca;
+}
+.bootstrap-spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(34, 197, 94, .35);
+    border-top-color: var(--green);
+    animation: bootstrap-spin .9s linear infinite;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+.bootstrap-banner.bootstrap-online .bootstrap-spinner {
+    border-color: var(--green);
+    border-top-color: var(--green);
+    animation: none;
+    background: var(--green);
+    position: relative;
+}
+.bootstrap-banner.bootstrap-online .bootstrap-spinner::after {
+    content: '';
+    position: absolute;
+    inset: 4px 5px;
+    border-left: 2px solid #0f1117;
+    border-bottom: 2px solid #0f1117;
+    transform: rotate(-45deg);
+    border-radius: 1px;
+}
+@keyframes bootstrap-spin { to { transform: rotate(360deg); } }
+
+.bootstrap-token-row { margin-bottom: 16px; }
+.bootstrap-token-label {
+    display: block;
+    font-size: 13px;
+    color: var(--text2);
+    margin-bottom: 6px;
+}
+.bootstrap-token-box {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+.bootstrap-token-text {
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    color: var(--text);
+    letter-spacing: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.bootstrap-token-actions {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    color: var(--text2);
+    font-size: 12px;
+}
+.bootstrap-token-link {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text2);
+    font-size: 12px;
+}
+.bootstrap-token-link:hover { color: var(--accent); }
+
+.bootstrap-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 14px 0 12px;
+    color: var(--text2);
+    font-size: 13px;
+}
+.bootstrap-divider::before,
+.bootstrap-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+.bootstrap-os-tabs {
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    margin-bottom: 12px;
+}
+.bootstrap-os-tabs .tab {
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text2);
+    padding: 10px 12px;
+    min-width: 0;
+}
+.bootstrap-os-tabs .tab.active {
+    color: var(--green);
+    background: transparent;
+    border-bottom-color: var(--green);
+}
+
+.bootstrap-command-box {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    word-break: break-all;
+    line-height: 1.6;
+    min-height: 44px;
+}
+.bootstrap-command-box .cmd-token {
+    color: var(--accent2);
+}
+.bootstrap-foot-note {
+    font-size: 12px;
+    color: var(--text2);
+    margin-top: 14px;
+    line-height: 1.6;
+}
 </style>
 </head>
 <body>
@@ -435,98 +595,106 @@ textarea { resize: vertical; min-height: 80px; font-family: monospace; }
 </div>
 
 <div id="client-add-overlay" class="login-overlay">
-    <div class="login-card modal-scroll" style="width:min(860px, calc(100vw - 24px)); padding:18px;">
-        <h2>添加客户端</h2>
-        <div class="compact-note">
-            在一个弹窗里完成 clientId 预生成、一键安装命令和手动启动命令复制。
+    <div class="login-card modal-scroll" style="width:min(720px, calc(100vw - 24px)); padding:22px;">
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+            <h2 style="margin:0; flex:1;">一键部署</h2>
+            <button class="btn btn-secondary btn-icon" type="button" onclick="closeClientAddDialog()" title="关闭">×</button>
         </div>
-        <div class="compact-card">
-            <div class="toolbar-row">
-                <div class="segmented">
-                    <div id="install-tab-linux" class="tab active" onclick="switchInstallScriptPlatform('linux')">Linux</div>
-                    <div id="install-tab-windows" class="tab" onclick="switchInstallScriptPlatform('windows')">Windows</div>
-                    <div id="install-tab-macos" class="tab" onclick="switchInstallScriptPlatform('macos')">macOS</div>
+
+        <!-- ===== 阶段 1: 填写信息 + 生成按钮 ===== -->
+        <div id="bootstrap-stage-form">
+            <div class="compact-note" style="margin-bottom:16px;">
+                填写客户端信息后点击 "生成一键部署命令"。生成后会得到一行命令，在目标机器执行即可自动安装并上线。
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>服务端地址</label>
+                    <input id="reserve-client-server" placeholder="留空则使用当前页面地址" />
+                </div>
+                <div class="form-group">
+                    <label>客户端名称</label>
+                    <input id="reserve-client-name" placeholder="留空自动生成" />
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>运营商</label>
+                    <select id="reserve-client-isp">
+                        <option value="Telecom">电信</option>
+                        <option value="Unicom">联通</option>
+                        <option value="Mobile">移动</option>
+                    </select>
+                </div>
+                <div class="form-group"></div>
+            </div>
+            <div class="option-list" style="margin-bottom:14px;">
+                <label class="option-item"><input type="checkbox" id="client-option-disable-auto-update"> 禁用自动更新</label>
+                <label class="option-item"><input type="checkbox" id="client-option-show-proxy" checked> 包含 GH Proxy 配置</label>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="btn btn-secondary" type="button" onclick="closeClientAddDialog()">取消</button>
+                <button class="btn btn-primary" type="button" id="bootstrap-generate-btn" onclick="generateBootstrapToken()">生成一键部署命令</button>
+            </div>
+        </div>
+
+        <!-- ===== 阶段 2: 显示 token + 命令 + 等待状态 ===== -->
+        <div id="bootstrap-stage-result" style="display:none;">
+            <div id="bootstrap-status-banner" class="bootstrap-banner bootstrap-waiting">
+                <span id="bootstrap-spinner" class="bootstrap-spinner"></span>
+                <span id="bootstrap-banner-text">等待 Instance 上线... 在目标机器上执行下面的命令即可。检测到节点上线后窗口会自动关闭。</span>
+            </div>
+
+            <div class="bootstrap-token-row">
+                <label class="bootstrap-token-label">Client ID</label>
+                <div class="bootstrap-token-box">
+                    <span id="bootstrap-token-text" class="bootstrap-token-text" data-revealed="0">··············································</span>
+                    <div class="bootstrap-token-actions">
+                        <button class="bootstrap-token-link" type="button" onclick="toggleBootstrapTokenVisibility()" id="bootstrap-token-toggle">显示</button>
+                        <button class="bootstrap-token-link" type="button" onclick="copyBootstrapClientId()">复制</button>
+                    </div>
                 </div>
             </div>
 
-            <div style="border-top:1px solid var(--border); padding-top:10px;">
-                <h3 style="margin:0 0 10px; color:var(--accent); font-size:15px;">一键部署指令</h3>
-                <div class="compact-note">
-                    自动生成安装命令。Linux 自动适配 <span style="font-family:monospace;">systemd / openrc / OpenWrt procd</span>，macOS 使用 <span style="font-family:monospace;">launchd</span>，Windows 使用开机自启动计划任务。
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>服务端地址</label>
-                        <input id="reserve-client-server" placeholder="如: https://home.greepar.uk:5000" />
-                    </div>
-                    <div class="form-group">
-                        <label>客户端名称</label>
-                        <input id="reserve-client-name" placeholder="如: GX-Cu" />
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>运营商</label>
-                        <select id="reserve-client-isp">
-                            <option value="Telecom">电信</option>
-                            <option value="Unicom">联通</option>
-                            <option value="Mobile">移动</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>预生成 clientId</label>
-                        <div style="display:flex; gap:8px; align-items:center;">
-                            <input id="reserved-client-id" readonly placeholder="生成后的 clientId 会显示在这里" />
-                            <button class="btn btn-secondary" type="button" onclick="copyReservedClientId()">复制</button>
-                        </div>
-                    </div>
-                </div>
-                <div class="install-layout">
-                    <div class="options-panel">
-                        <h3>安装选项</h3>
-                        <div class="option-list">
-                            <label class="option-item"><input type="checkbox" id="client-option-disable-auto-update"> 禁用自动更新</label>
-                            <label class="option-item"><input type="checkbox" id="client-option-include-uninstall" checked> 显示卸载命令</label>
-                            <label class="option-item"><input type="checkbox" id="client-option-show-manual"> 显示手动启动命令</label>
-                            <label class="option-item"><input type="checkbox" id="client-option-show-proxy" checked> 包含代理配置</label>
-                        </div>
-                    </div>
-                    <div class="command-panel">
-                        <h3>部署命令</h3>
-                        <div class="compact-note">根据当前平台和选项即时生成。Linux 自动适配 <span style="font-family:monospace;">systemd / openrc / OpenWrt procd</span>。</div>
-                        <div id="install-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备脚本...</div>
-                        <div id="install-script-oneliner" class="compact-command-box" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
-                        <div class="compact-actions">
-                            <button class="btn btn-primary" onclick="reserveClientId()">生成并加入允许列表</button>
-                            <button class="btn btn-secondary" type="button" onclick="copyInstallOneLiner()">复制</button>
-                            <button class="btn btn-secondary" type="button" onclick="refreshInstallScript()">刷新</button>
-                        </div>
-                    </div>
-                </div>
+            <div class="bootstrap-divider"><span>在目标机器执行</span></div>
 
-                <details id="client-uninstall-section" class="fold-section">
+            <div class="segmented bootstrap-os-tabs">
+                <div id="bootstrap-tab-windows" class="tab" onclick="switchBootstrapPlatform('windows')">Windows (PowerShell)</div>
+                <div id="bootstrap-tab-linux" class="tab active" onclick="switchBootstrapPlatform('linux')">Linux / macOS</div>
+            </div>
+
+            <div id="bootstrap-command-box" class="bootstrap-command-box">正在生成命令...</div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:12px;">
+                <button class="btn btn-secondary" type="button" onclick="resetBootstrapStage()">← 修改信息并重新生成</button>
+                <button class="btn btn-primary" type="button" onclick="copyBootstrapCommand()">复制命令</button>
+            </div>
+
+            <div class="bootstrap-foot-note">
+                命令会下载 CfSpeedtest 客户端并在前台运行，自动检测公网 IP 与地区并向 Hub 注册。
+            </div>
+
+            <details id="bootstrap-advanced" class="fold-section" style="margin-top:14px;">
+                <summary>更多命令</summary>
+
+                <details class="fold-section" style="margin-top:6px;">
                     <summary>卸载方法</summary>
-                    <div style="font-size:12px; color:var(--text2); margin-bottom:12px;">
-                        用于卸载当前已经安装好的客户端服务。会停止服务并删除安装目录；不会删除服务端上的客户端记录。
-                    </div>
+                    <div style="font-size:12px; color:var(--text2); margin-bottom:8px;">用于卸载已经安装好的客户端服务。</div>
                     <div id="uninstall-script-meta" style="font-size:12px; color:var(--text2); margin-bottom:8px;">正在准备卸载命令...</div>
                     <div id="uninstall-script-oneliner" class="compact-command-box" style="font-family:monospace; font-size:12px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-bottom:8px; word-break:break-all;"></div>
                     <button class="btn btn-secondary" type="button" onclick="copyUninstallOneLiner()">复制卸载命令</button>
                 </details>
 
-                <details id="client-manual-section" class="fold-section">
-                    <summary>手动模式 / 无自动安装</summary>
-                    <div class="compact-note">
-                        纯手动启动模式，适合不安装服务或仅复制启动参数的场景。
+                <details class="fold-section" style="margin-top:10px;">
+                    <summary>手动启动命令</summary>
+                    <div class="compact-note">无服务/手动模式：直接执行客户端二进制带参数运行。</div>
+                    <div id="reserved-client-command" data-command="" class="compact-command-box" style="margin-top:6px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
+                    <div style="margin-top:8px;">
+                        <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制手动启动命令</button>
                     </div>
-                    <div class="compact-note">是否追加 <span style="font-family:monospace;">--disable-auto-update</span> 由左侧“禁用自动更新”选项控制。</div>
-                    <button class="btn btn-secondary" type="button" onclick="copyReservedClientCommand()">复制手动启动命令</button>
-                    <div id="reserved-client-command" data-command="" class="compact-command-box" style="margin-top:8px; font-family:monospace; font-size:12px; color:var(--text2); word-break:break-all;"></div>
                 </details>
-            </div>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;">
-            <button class="btn btn-secondary" type="button" onclick="closeClientAddDialog()">关闭</button>
+            </details>
+
+            <input id="reserved-client-id" type="hidden" />
         </div>
     </div>
 </div>
@@ -1502,7 +1670,7 @@ function loadClients() {
                 '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
                 '<td style="display:flex; gap:6px;">' +
                 '<button class="btn btn-secondary" onclick="showClientLog(\'' + c.clientId.replace(/'/g, "\\'") + '\')">详情</button>' +
-                '<button class="btn btn-secondary" onclick="editClientMetadata(\'' + c.clientId.replace(/'/g, "\\'") + '\', \'' + String(c.name || '').replace(/'/g, "\\'") + '\', \'' + String(c.isp || '').replace(/'/g, "\\'") + '\')">编辑</button>' +
+                '<button class="btn btn-secondary" onclick="openClientDeployDialog(\'' + c.clientId.replace(/'/g, "\\'") + '\', \'' + String(c.name || '').replace(/'/g, "\\'") + '\', \'' + String(c.isp || '').replace(/'/g, "\\'") + '\')">编辑</button>' +
                 '<button class="btn btn-secondary" onclick="triggerClientRetest(\'' + c.clientId.replace(/'/g, "\\'") + '\')">重新测速</button>' +
                 '<button class="btn btn-secondary" onclick="triggerClientUpdate(\'' + c.clientId.replace(/'/g, "\\'") + '\')">触发更新</button>' +
                 '<button class="btn danger-btn btn-icon" onclick="deleteClient(\'' + c.clientId.replace(/'/g, "\\'") + '\')">X</button>' +
@@ -1514,106 +1682,368 @@ function loadClients() {
     });
 }
 
+// ===== One-click bootstrap deploy =====
+var bootstrapState = {
+    token: '',
+    clientId: '',
+    linuxCommand: '',
+    windowsCommand: '',
+    expiresAtUtc: '',
+    serverUrl: '',
+    revealed: false,
+    pollTimer: null,
+    closeTimer: null,
+    online: false,
+    creating: false,
+    platform: 'linux',
+    consumed: false,
+    editingClientId: ''
+};
+
 function syncClientCommandGenerator() {
     var serverInput = document.getElementById('reserve-client-server');
-    if (!serverInput) return;
-    if (!serverInput.value) {
+    if (serverInput && !serverInput.value) {
         serverInput.value = window.location.origin;
     }
-    ['reserve-client-server', 'reserve-client-name', 'reserve-client-isp', 'reserved-client-id', 'client-option-disable-auto-update', 'client-option-include-uninstall', 'client-option-show-manual', 'client-option-show-proxy'].forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el && !el.dataset.installScriptBound) {
-            el.addEventListener('input', refreshInstallScript);
-            el.addEventListener('change', refreshInstallScript);
-            el.dataset.installScriptBound = '1';
-        }
-    });
-    refreshInstallScript();
+}
+
+function setBootstrapStage(stage) {
+    var form = document.getElementById('bootstrap-stage-form');
+    var result = document.getElementById('bootstrap-stage-result');
+    if (!form || !result) return;
+    if (stage === 'result') {
+        form.style.display = 'none';
+        result.style.display = '';
+    } else {
+        form.style.display = '';
+        result.style.display = 'none';
+    }
 }
 
 function openClientAddDialog() {
     document.getElementById('client-add-overlay').classList.add('active');
     syncClientCommandGenerator();
+    var advanced = document.getElementById('bootstrap-advanced');
+    if (advanced) advanced.open = false;
+    bootstrapState.platform = 'linux';
+    bootstrapState.token = '';
+    bootstrapState.clientId = '';
+    bootstrapState.online = false;
+    bootstrapState.consumed = false;
+    bootstrapState.editingClientId = '';
+    setBootstrapPlatformUI('linux');
+    setBootstrapStage('form');
+    var generateBtn = document.getElementById('bootstrap-generate-btn');
+    if (generateBtn) generateBtn.textContent = '生成一键部署命令';
+    // 表单清空
+    var nameEl = document.getElementById('reserve-client-name');
+    if (nameEl) nameEl.value = '';
+    var ispEl = document.getElementById('reserve-client-isp');
+    if (ispEl) ispEl.value = 'Telecom';
+    var disableEl = document.getElementById('client-option-disable-auto-update');
+    if (disableEl) disableEl.checked = false;
+    var proxyEl = document.getElementById('client-option-show-proxy');
+    if (proxyEl) proxyEl.checked = true;
+}
+
+/// 列表里点 "编辑" / "查看部署命令" 时直接进入阶段 2，复用原 clientId 重新签发短 token
+function openClientDeployDialog(clientId, name, isp) {
+    document.getElementById('client-add-overlay').classList.add('active');
+    syncClientCommandGenerator();
+    var advanced = document.getElementById('bootstrap-advanced');
+    if (advanced) advanced.open = false;
+
+    bootstrapState.platform = 'linux';
+    bootstrapState.token = '';
+    bootstrapState.clientId = '';
+    bootstrapState.online = false;
+    bootstrapState.consumed = false;
+    bootstrapState.editingClientId = clientId || '';
+    setBootstrapPlatformUI('linux');
+
+    // 把已有信息填入表单（让 "修改信息并重新生成" 后字段不空）
+    var nameEl = document.getElementById('reserve-client-name');
+    if (nameEl) nameEl.value = name || '';
+    var ispEl = document.getElementById('reserve-client-isp');
+    if (ispEl) ispEl.value = isp || 'Telecom';
+    var disableEl = document.getElementById('client-option-disable-auto-update');
+    if (disableEl) disableEl.checked = false;
+    var proxyEl = document.getElementById('client-option-show-proxy');
+    if (proxyEl) proxyEl.checked = true;
+
+    // 直接为已有客户端签发新的 bootstrap token
+    setBootstrapStage('result');
+    setBootstrapBanner('waiting');
+    setBootstrapTokenText('··············································');
+    setBootstrapCommandText('正在生成命令...');
+    generateBootstrapToken(clientId);
 }
 
 function closeClientAddDialog() {
     document.getElementById('client-add-overlay').classList.remove('active');
+    stopBootstrapPolling();
+    if (bootstrapState.closeTimer) {
+        clearTimeout(bootstrapState.closeTimer);
+        bootstrapState.closeTimer = null;
+    }
+    // 关闭弹窗时不再删除已预留的 clientId；保留在白名单等待节点上线
 }
 
-var currentInstallScriptPlatform = 'linux';
-
-function switchInstallScriptPlatform(platform) {
-    currentInstallScriptPlatform = platform;
-    ['linux', 'macos', 'windows'].forEach(function(name) {
-        var el = document.getElementById('install-tab-' + name);
-        if (el) {
-            el.classList.toggle('active', name === platform);
-        }
-    });
-    refreshInstallScript();
+function resetBootstrapStage() {
+    stopBootstrapPolling();
+    if (bootstrapState.closeTimer) {
+        clearTimeout(bootstrapState.closeTimer);
+        bootstrapState.closeTimer = null;
+    }
+    // 进 "修改信息并重新生成" 时让表单复用现有 clientId（不会污染列表）
+    bootstrapState.editingClientId = bootstrapState.clientId || bootstrapState.editingClientId || '';
+    setBootstrapStage('form');
 }
 
-function buildInstallScriptParams() {
-    var server = (document.getElementById('reserve-client-server').value.trim() || window.location.origin).replace(/\/$/, '');
-    var clientId = document.getElementById('reserved-client-id').value.trim() || 'CHANGE_ME_CLIENT_ID';
-    var isp = document.getElementById('reserve-client-isp').value || 'Telecom';
-    var name = document.getElementById('reserve-client-name').value.trim() || (isp + '-' + clientId.substring(0, 8));
+function stopBootstrapPolling() {
+    if (bootstrapState.pollTimer) {
+        clearInterval(bootstrapState.pollTimer);
+        bootstrapState.pollTimer = null;
+    }
+}
 
-    return {
-        platform: currentInstallScriptPlatform,
-        serverUrl: server,
-        clientId: clientId,
-        isp: isp,
-        name: name
+function setBootstrapBanner(kind, customText) {
+    var banner = document.getElementById('bootstrap-status-banner');
+    var text = document.getElementById('bootstrap-banner-text');
+    if (!banner || !text) return;
+    banner.classList.remove('bootstrap-waiting', 'bootstrap-online', 'bootstrap-error');
+    if (kind === 'online') {
+        banner.classList.add('bootstrap-online');
+        text.textContent = customText || '节点已上线，正在为你刷新列表...';
+    } else if (kind === 'error') {
+        banner.classList.add('bootstrap-error');
+        text.textContent = customText || '生成 Bootstrap Token 失败';
+    } else {
+        banner.classList.add('bootstrap-waiting');
+        text.textContent = customText || '等待 Instance 上线... 在目标机器上执行下面的命令即可。检测到节点上线后窗口会自动关闭。';
+    }
+}
+
+function generateBootstrapToken(clientIdOverride) {
+    if (bootstrapState.creating) return;
+    bootstrapState.creating = true;
+    bootstrapState.online = false;
+    bootstrapState.consumed = false;
+    stopBootstrapPolling();
+
+    var serverEl = document.getElementById('reserve-client-server');
+    var nameEl = document.getElementById('reserve-client-name');
+    var ispEl = document.getElementById('reserve-client-isp');
+    var proxyEl = document.getElementById('client-option-show-proxy');
+    var disableAutoUpdateEl = document.getElementById('client-option-disable-auto-update');
+    var generateBtn = document.getElementById('bootstrap-generate-btn');
+
+    var reuseClientId = '';
+    if (typeof clientIdOverride === 'string' && clientIdOverride) {
+        reuseClientId = clientIdOverride;
+    } else if (bootstrapState.editingClientId) {
+        reuseClientId = bootstrapState.editingClientId;
+    }
+
+    var payload = {
+        name: nameEl ? nameEl.value.trim() : '',
+        isp: ispEl ? ispEl.value : 'Telecom',
+        serverUrl: serverEl ? serverEl.value.trim() : '',
+        includeProxy: proxyEl ? !!proxyEl.checked : true,
+        disableAutoUpdate: disableAutoUpdateEl ? !!disableAutoUpdateEl.checked : false,
+        clientId: reuseClientId
     };
-}
 
-function requestClientScript(scriptType) {
-    var params = buildInstallScriptParams();
-    return api('/api/client/install-script', 'POST', {
-        platform: params.platform,
-        scriptType: scriptType,
-        serverUrl: params.serverUrl,
-        clientId: params.clientId,
-        isp: params.isp,
-        name: params.name,
-        includeProxy: !!document.getElementById('client-option-show-proxy').checked,
-        disableAutoUpdate: !!document.getElementById('client-option-disable-auto-update').checked
-    });
-}
+    if (generateBtn) {
+        generateBtn.disabled = true;
+        generateBtn.textContent = '正在生成...';
+    }
 
-function refreshInstallScript() {
-    var metaEl = document.getElementById('install-script-meta');
-    var oneLinerEl = document.getElementById('install-script-oneliner');
-    if (!metaEl || !oneLinerEl) return;
-
-    var params = buildInstallScriptParams();
-    metaEl.textContent = '正在生成 ' + params.platform + ' 一键安装命令...';
-    oneLinerEl.textContent = '';
-    oneLinerEl.dataset.command = '';
-    requestClientScript('install').then(function(r) {
+    api('/api/bootstrap/create', 'POST', payload).then(function(r) {
         if (!r.success || !r.data) {
-            metaEl.textContent = r.message || '请先在配置页填写 GitHub 仓库和 Release Tag';
+            toast(r.message || '生成失败', false);
+            // 编辑模式下生成失败也回到表单页
+            if (reuseClientId) setBootstrapStage('form');
             return;
         }
 
-        var data = r.data;
-        oneLinerEl.textContent = data.script || '';
-        oneLinerEl.dataset.command = data.script || '';
-        metaEl.innerHTML =
-            '脚本来源: <span style="font-family:monospace;">' + escapeHtml(data.scriptSource || '-') + '</span> &nbsp; ' +
-            '服务托管: <span style="font-family:monospace;">' + escapeHtml(data.serviceKind || '-') + '</span> &nbsp; ' +
-            '文件名: <span style="font-family:monospace;">' + escapeHtml(data.scriptFileName || '-') + '</span>' +
-            (data.scriptUrl ? ' &nbsp; 脚本地址: <span style="font-family:monospace;">' + escapeHtml(data.scriptUrl) + '</span>' : '');
-    }).catch(function(err) {
-        metaEl.textContent = '生成失败: ' + (err.message || 'unknown');
-    }).finally(function() {
+        bootstrapState.token = r.data.token || '';
+        bootstrapState.clientId = r.data.clientId || '';
+        bootstrapState.linuxCommand = r.data.linuxCommand || '';
+        bootstrapState.windowsCommand = r.data.windowsCommand || '';
+        bootstrapState.expiresAtUtc = r.data.expiresAtUtc || '';
+        bootstrapState.serverUrl = r.data.serverUrl || '';
+        bootstrapState.revealed = false;
+        bootstrapState.editingClientId = bootstrapState.clientId;
+
+        var hidden = document.getElementById('reserved-client-id');
+        if (hidden) hidden.value = bootstrapState.clientId;
+
+        setBootstrapStage('result');
+        var toggleBtn = document.getElementById('bootstrap-token-toggle');
+        if (toggleBtn) toggleBtn.textContent = '显示';
+        renderBootstrapToken();
+        renderBootstrapCommand();
+        setBootstrapBanner('waiting');
+        startBootstrapPolling();
         refreshUninstallScript();
         refreshManualClientCommand();
-        var uninstallSection = document.getElementById('client-uninstall-section');
-        var manualSection = document.getElementById('client-manual-section');
-        if (uninstallSection) uninstallSection.open = !!document.getElementById('client-option-include-uninstall').checked;
-        if (manualSection) manualSection.open = !!document.getElementById('client-option-show-manual').checked;
+        loadClients();
+    }).catch(function(err) {
+        toast('生成失败: ' + (err.message || 'unknown'), false);
+        if (reuseClientId) setBootstrapStage('form');
+    }).finally(function() {
+        bootstrapState.creating = false;
+        if (generateBtn) {
+            generateBtn.disabled = false;
+            generateBtn.textContent = bootstrapState.editingClientId ? '重新生成命令' : '生成一键部署命令';
+        }
+    });
+}
+
+function setBootstrapTokenText(text) {
+    var el = document.getElementById('bootstrap-token-text');
+    if (el) el.textContent = text;
+}
+
+function renderBootstrapToken() {
+    var clientId = bootstrapState.clientId || '';
+    if (!clientId) {
+        setBootstrapTokenText('··············································');
+        return;
+    }
+    if (bootstrapState.revealed) {
+        setBootstrapTokenText(clientId);
+    } else {
+        setBootstrapTokenText('•'.repeat(Math.max(clientId.length, 32)));
+    }
+}
+
+function toggleBootstrapTokenVisibility() {
+    bootstrapState.revealed = !bootstrapState.revealed;
+    var toggleBtn = document.getElementById('bootstrap-token-toggle');
+    if (toggleBtn) toggleBtn.textContent = bootstrapState.revealed ? '隐藏' : '显示';
+    renderBootstrapToken();
+}
+
+function copyBootstrapClientId() {
+    if (!bootstrapState.clientId) {
+        toast('还没有生成 Client ID', false);
+        return;
+    }
+    copyTextToClipboard(bootstrapState.clientId, 'Client ID 已复制');
+}
+
+function copyBootstrapToken() {
+    if (!bootstrapState.token) {
+        toast('还没有生成 Token', false);
+        return;
+    }
+    copyTextToClipboard(bootstrapState.token, 'Token 已复制');
+}
+
+function setBootstrapCommandText(text) {
+    var box = document.getElementById('bootstrap-command-box');
+    if (box) {
+        box.textContent = text;
+        box.dataset.command = '';
+    }
+}
+
+function renderBootstrapCommand() {
+    var box = document.getElementById('bootstrap-command-box');
+    if (!box) return;
+    var cmd = bootstrapState.platform === 'windows'
+        ? bootstrapState.windowsCommand
+        : bootstrapState.linuxCommand;
+    if (!cmd) {
+        box.textContent = '正在生成命令...';
+        box.dataset.command = '';
+        return;
+    }
+    box.textContent = cmd;
+    box.dataset.command = cmd;
+    if (bootstrapState.token) {
+        var idx = cmd.indexOf(bootstrapState.token);
+        if (idx >= 0) {
+            box.innerHTML = escapeHtml(cmd.substring(0, idx)) +
+                '<span class="cmd-token">' + escapeHtml(bootstrapState.token) + '</span>' +
+                escapeHtml(cmd.substring(idx + bootstrapState.token.length));
+        }
+    }
+}
+
+function setBootstrapPlatformUI(platform) {
+    bootstrapState.platform = platform;
+    var winTab = document.getElementById('bootstrap-tab-windows');
+    var linuxTab = document.getElementById('bootstrap-tab-linux');
+    if (winTab) winTab.classList.toggle('active', platform === 'windows');
+    if (linuxTab) linuxTab.classList.toggle('active', platform !== 'windows');
+}
+
+function switchBootstrapPlatform(platform) {
+    setBootstrapPlatformUI(platform);
+    renderBootstrapCommand();
+}
+
+function copyBootstrapCommand() {
+    var cmd = bootstrapState.platform === 'windows'
+        ? bootstrapState.windowsCommand
+        : bootstrapState.linuxCommand;
+    if (!cmd) {
+        toast('当前没有可复制的命令', false);
+        return;
+    }
+    copyTextToClipboard(cmd, '命令已复制');
+}
+
+function startBootstrapPolling() {
+    stopBootstrapPolling();
+    if (!bootstrapState.token) return;
+    var token = bootstrapState.token;
+    bootstrapState.pollTimer = setInterval(function() {
+        if (bootstrapState.token !== token) {
+            stopBootstrapPolling();
+            return;
+        }
+        api('/api/bootstrap/' + encodeURIComponent(token) + '/status', 'GET').then(function(r) {
+            if (!r.success || !r.data) return;
+            if (r.data.consumed) bootstrapState.consumed = true;
+            if (r.data.online && !bootstrapState.online) {
+                bootstrapState.online = true;
+                bootstrapState.consumed = true;
+                setBootstrapBanner('online', '✓ 节点已上线，窗口将自动关闭...');
+                stopBootstrapPolling();
+                loadClients();
+                bootstrapState.closeTimer = setTimeout(function() {
+                    closeClientAddDialog();
+                }, 1200);
+            } else if (r.data.expired) {
+                stopBootstrapPolling();
+                setBootstrapBanner('error', 'Token 已过期，请点 "修改信息并重新生成"');
+            }
+        }).catch(function() { /* ignore */ });
+    }, 2000);
+}
+
+function requestClientScript(scriptType) {
+    var server = (document.getElementById('reserve-client-server').value.trim() || window.location.origin).replace(/\/$/, '');
+    var hidden = document.getElementById('reserved-client-id');
+    var clientId = bootstrapState.clientId || (hidden ? hidden.value.trim() : '') || 'CHANGE_ME_CLIENT_ID';
+    var isp = document.getElementById('reserve-client-isp').value || 'Telecom';
+    var nameInput = document.getElementById('reserve-client-name').value.trim();
+    var name = nameInput || (isp + '-' + (clientId || '').substring(0, 8));
+    var platform = bootstrapState.platform === 'windows' ? 'windows' : 'linux';
+
+    return api('/api/client/install-script', 'POST', {
+        platform: platform,
+        scriptType: scriptType,
+        serverUrl: server,
+        clientId: clientId,
+        isp: isp,
+        name: name,
+        includeProxy: !!document.getElementById('client-option-show-proxy').checked,
+        disableAutoUpdate: !!document.getElementById('client-option-disable-auto-update').checked
     });
 }
 
@@ -1630,7 +2060,7 @@ function refreshUninstallScript() {
             metaEl.textContent = r.message || '当前无法生成卸载命令';
             return;
         }
-        metaEl.textContent = (r.data.platform || currentInstallScriptPlatform) + ' 卸载命令';
+        metaEl.textContent = (r.data.platform || bootstrapState.platform) + ' 卸载命令';
         oneLinerEl.textContent = r.data.script || '';
         oneLinerEl.dataset.command = r.data.script || '';
     }).catch(function(err) {
@@ -1650,7 +2080,7 @@ function refreshManualClientCommand() {
             return;
         }
         commandEl.dataset.command = r.data.script || '';
-        commandEl.textContent = '启动命令示例: ' + (r.data.script || '');
+        commandEl.textContent = r.data.script || '';
     }).catch(function(err) {
         commandEl.textContent = '生成失败: ' + (err.message || 'unknown');
     });
@@ -1665,32 +2095,6 @@ function saveClientWhitelistOnly() {
     });
 }
 
-function reserveClientId() {
-    var name = document.getElementById('reserve-client-name').value.trim();
-    var isp = document.getElementById('reserve-client-isp').value;
-    api('/api/clients/reserve', 'POST', { name: name, isp: isp }).then(function(r) {
-        if (!r.success || !r.data) {
-            toast(r.message || '生成失败', false);
-            return;
-        }
-
-        var clientId = r.data.clientId;
-        document.getElementById('reserved-client-id').value = clientId;
-        refreshInstallScript();
-        toast('clientId 已生成并加入允许列表');
-        loadClients();
-    });
-}
-
-function copyReservedClientId() {
-    var value = document.getElementById('reserved-client-id').value;
-    if (!value) {
-        toast('还没有生成 clientId', false);
-        return;
-    }
-    copyTextToClipboard(value, 'clientId 已复制');
-}
-
 function copyReservedClientCommand() {
     var command = document.getElementById('reserved-client-command').dataset.command || '';
     if (!command) {
@@ -1698,15 +2102,6 @@ function copyReservedClientCommand() {
         return;
     }
     copyTextToClipboard(command, '启动命令已复制');
-}
-
-function copyInstallOneLiner() {
-    var command = (document.getElementById('install-script-oneliner').dataset.command || '').trim();
-    if (!command) {
-        toast('当前没有可复制的一键安装命令', false);
-        return;
-    }
-    copyTextToClipboard(command, '一键安装命令已复制');
 }
 
 function copyUninstallOneLiner() {
