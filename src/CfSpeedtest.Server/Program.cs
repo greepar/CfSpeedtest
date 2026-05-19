@@ -4,6 +4,7 @@ using System.IO;
 using CfSpeedtest.Server.Services;
 using CfSpeedtest.Shared;
 using Microsoft.AspNetCore.Http.Json;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 
@@ -18,6 +19,15 @@ builder.Services.Configure<JsonOptions>(o =>
 builder.Services.Configure<HostOptions>(o =>
 {
     o.ShutdownTimeout = TimeSpan.FromSeconds(5);
+});
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor
+        | ForwardedHeaders.XForwardedProto
+        | ForwardedHeaders.XForwardedHost;
+    // 接受任意上游反代（生产建议改成具体 KnownIPNetworks/KnownProxies）
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 
 builder.Services.AddSingleton<DataStore>();
@@ -48,6 +58,8 @@ app.Lifetime.ApplicationStopping.Register(() =>
     }
 });
 
+app.UseForwardedHeaders();
+
 app.Use(async (context, next) =>
 {
     if (!RequiresWebUiAuth(context.Request.Path))
@@ -55,7 +67,6 @@ app.Use(async (context, next) =>
         await next();
         return;
     }
-
     var auth = context.RequestServices.GetRequiredService<WebUiAuthService>();
     var store = context.RequestServices.GetRequiredService<DataStore>();
     if (auth.TryAuthenticate(context, store, out var username))
@@ -456,7 +467,6 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
 
     string clientId;
     string name;
-    var reuseExisting = false;
 
     if (!string.IsNullOrWhiteSpace(req.ClientId))
     {
@@ -474,7 +484,6 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
             store.UpdateClientMetadata(clientId, isp, string.IsNullOrWhiteSpace(newName) ? $"{isp}-{clientId[..6]}" : newName);
         }
         name = string.IsNullOrWhiteSpace(newName) ? $"{isp}-{clientId[..6]}" : newName;
-        reuseExisting = true;
     }
     else
     {
@@ -602,8 +611,9 @@ app.MapGet("/i/{token}", (HttpContext http, string token, DataStore store) =>
         ? BuildBootstrapPowerShellScript(record, config)
         : BuildBootstrapBashScript(record, config);
 
-    var contentType = isWindows ? "text/plain; charset=utf-8" : "text/x-shellscript; charset=utf-8";
-    return Results.Text(script, contentType, System.Text.Encoding.UTF8);
+    // 简单返回 text/plain；让 ASP.NET 自己加 charset，避免反代解析重复 charset 时返回 502
+    http.Response.Headers["Cache-Control"] = "no-store";
+    return Results.Text(script, "text/plain", System.Text.Encoding.UTF8);
 });
 
 app.MapGet("/api/auth/status", (HttpContext http, DataStore store, WebUiAuthService auth) =>
