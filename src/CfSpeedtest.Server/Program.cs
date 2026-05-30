@@ -11,6 +11,12 @@ using Microsoft.Extensions.Hosting;
 var builder = WebApplication.CreateBuilder(args);
 var clientUpdatesDir = Path.Combine(builder.Environment.ContentRootPath, "client-updates");
 Directory.CreateDirectory(clientUpdatesDir);
+var materialWebDir = new[]
+{
+    Path.Combine(builder.Environment.ContentRootPath, "material-web"),
+    Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "material-web")),
+}
+.FirstOrDefault(Directory.Exists);
 
 builder.Services.Configure<JsonOptions>(o =>
 {
@@ -87,6 +93,16 @@ app.UseWebSockets(new WebSocketOptions
 });
 app.UseDefaultFiles();
 app.UseStaticFiles();
+if (!string.IsNullOrWhiteSpace(materialWebDir))
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new PhysicalFileProvider(materialWebDir),
+        RequestPath = "/material-web",
+        ServeUnknownFileTypes = true,
+        DefaultContentType = "application/octet-stream"
+    });
+}
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(clientUpdatesDir),
@@ -610,6 +626,10 @@ app.MapGet("/i/{token}", (HttpContext http, string token, DataStore store) =>
     var script = isWindows
         ? BuildBootstrapPowerShellScript(record, config)
         : BuildBootstrapBashScript(record, config);
+
+    // bash 脚本必须使用 LF 换行，避免 Windows 服务端生成的 CRLF 导致 Linux 端 $'\r' 错误
+    if (!isWindows)
+        script = script.Replace("\r\n", "\n");
 
     // 简单返回 text/plain；让 ASP.NET 自己加 charset，避免反代解析重复 charset 时返回 502
     http.Response.Headers["Cache-Control"] = "no-store";

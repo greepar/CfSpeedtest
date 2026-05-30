@@ -17,6 +17,16 @@ using CfSpeedtest.Shared;
 //  Cloudflare IP 测速客户端 (NativeAOT Compatible)
 // ============================================================
 
+// 处理 --install / --uninstall 命令（优先于正常启动）
+if (HasFlag(args, "install"))
+{
+    return ServiceInstaller.Install(args);
+}
+if (HasFlag(args, "uninstall"))
+{
+    return ServiceInstaller.Uninstall();
+}
+
 Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
 Console.WriteLine();
 
@@ -762,8 +772,32 @@ static bool HasManagedServiceInstall()
     {
         if (OperatingSystem.IsWindows())
         {
+            // 检测 NSSM 方式安装
             var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CfSpeedtestClient");
-            return File.Exists(Path.Combine(installDir, "nssm", "nssm.exe"));
+            if (File.Exists(Path.Combine(installDir, "nssm", "nssm.exe")))
+                return true;
+
+            // 检测 sc.exe 原生服务注册
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = "query CfSpeedtestClient",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                };
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    proc.WaitForExit();
+                    return proc.ExitCode == 0;
+                }
+            }
+            catch { }
+
+            return false;
         }
 
         if (OperatingSystem.IsLinux())
@@ -1424,6 +1458,396 @@ sealed class ClientTransportState : IDisposable
         lock (_lock)
         {
             _httpClient.Dispose();
+        }
+    }
+}
+
+// ============================================================
+//  服务安装/卸载 (跨平台)
+// ============================================================
+static class ServiceInstaller
+{
+    private const string ServiceName = "CfSpeedtestClient";
+    private const string DisplayName = "CfSpeedtest Client";
+    private const string Description = "Cloudflare IP SpeedTest Client Service";
+
+    public static int Install(string[] args)
+    {
+        if (OperatingSystem.IsWindows())
+            return InstallWindows(args);
+        if (OperatingSystem.IsLinux())
+            return InstallLinux(args);
+        if (OperatingSystem.IsMacOS())
+            return InstallMacOS(args);
+
+        Console.WriteLine("Unsupported platform for service installation.");
+        return 1;
+    }
+
+    public static int Uninstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return UninstallWindows();
+        if (OperatingSystem.IsLinux())
+            return UninstallLinux();
+        if (OperatingSystem.IsMacOS())
+            return UninstallMacOS();
+
+        Console.WriteLine("Unsupported platform for service uninstallation.");
+        return 1;
+    }
+
+    // ---- Windows: sc.exe ----
+
+    private static int InstallWindows(string[] args)
+    {
+        var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrEmpty(exePath))
+        {
+            Console.WriteLine("Error: Cannot determine executable path.");
+            return 1;
+        }
+
+        // 构建服务运行时参数（排除 --install 和 --uninstall）
+        var serviceArgs = BuildServiceArgs(args);
+        var binPath = $"\"{exePath}\" {serviceArgs} --service";
+
+        Console.WriteLine($"Installing Windows service '{ServiceName}'...");
+
+        // 创建服务
+        var result = RunProcess("sc.exe", $"create {ServiceName} binPath= \"{binPath}\" start= auto DisplayName= \"{DisplayName}\"");
+        if (result != 0)
+        {
+            Console.WriteLine("Failed to create service. Make sure you run as Administrator.");
+            return 1;
+        }
+
+        // 设置描述
+        RunProcess("sc.exe", $"description {ServiceName} \"{Description}\"");
+
+        // 设置失败后自动重启
+        RunProcess("sc.exe", $"failure {ServiceName} reset= 60 actions= restart/5000/restart/10000/restart/30000");
+
+        // 启动服务
+        Console.WriteLine("Starting service...");
+        result = RunProcess("sc.exe", $"start {ServiceName}");
+        if (result != 0)
+        {
+            Console.WriteLine("Service created but failed to start. You can start it manually with: sc start CfSpeedtestClient");
+        }
+        else
+        {
+            Console.WriteLine("Service installed and started successfully.");
+        }
+
+        return 0;
+    }
+
+    private static int UninstallWindows()
+    {
+        Console.WriteLine($"Stopping Windows service '{ServiceName}'...");
+        RunProcess("sc.exe", $"stop {ServiceName}");
+
+        // 等待服务停止
+        Thread.Sleep(2000);
+
+        Console.WriteLine($"Removing Windows service '{ServiceName}'...");
+        var result = RunProcess("sc.exe", $"delete {ServiceName}");
+        if (result != 0)
+        {
+            Console.WriteLine("Failed to remove service. Make sure you run as Administrator.");
+            return 1;
+        }
+
+        Console.WriteLine("Service uninstalled successfully.");
+        return 0;
+    }
+
+    // ---- Linux: systemd ----
+
+    private static int InstallLinux(string[] args)
+    {
+        var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrEmpty(exePath))
+        {
+            Console.WriteLine("Error: Cannot determine executable path.");
+            return 1;
+        }
+
+        var serviceArgs = BuildServiceArgs(args);
+        var serviceName = "cfspeedtest-client";
+        var unitPath = $"/etc/systemd/system/{serviceName}.service";
+
+        var unitContent = $"""
+            [Unit]
+            Description={Description}
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            ExecStart={exePath} {serviceArgs} --service
+            Restart=always
+            RestartSec=5
+            WorkingDirectory={Path.GetDirectoryName(exePath)}
+
+            [Install]
+            WantedBy=multi-user.target
+            """;
+
+        Console.WriteLine($"Installing systemd service '{serviceName}'...");
+
+        try
+        {
+            File.WriteAllText(unitPath, unitContent);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Console.WriteLine("Error: Permission denied. Run with sudo.");
+            return 1;
+        }
+
+        RunProcess("systemctl", "daemon-reload");
+        RunProcess("systemctl", $"enable {serviceName}");
+
+        Console.WriteLine("Starting service...");
+        var result = RunProcess("systemctl", $"start {serviceName}");
+        if (result != 0)
+        {
+            Console.WriteLine("Service installed but failed to start. Check: systemctl status cfspeedtest-client");
+        }
+        else
+        {
+            Console.WriteLine("Service installed and started successfully.");
+        }
+
+        return 0;
+    }
+
+    private static int UninstallLinux()
+    {
+        var serviceName = "cfspeedtest-client";
+        var unitPath = $"/etc/systemd/system/{serviceName}.service";
+
+        Console.WriteLine($"Stopping systemd service '{serviceName}'...");
+        RunProcess("systemctl", $"stop {serviceName}");
+        RunProcess("systemctl", $"disable {serviceName}");
+
+        if (File.Exists(unitPath))
+        {
+            try
+            {
+                File.Delete(unitPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Console.WriteLine("Error: Permission denied. Run with sudo.");
+                return 1;
+            }
+        }
+
+        RunProcess("systemctl", "daemon-reload");
+        Console.WriteLine("Service uninstalled successfully.");
+        return 0;
+    }
+
+    // ---- macOS: launchd ----
+
+    private static int InstallMacOS(string[] args)
+    {
+        var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrEmpty(exePath))
+        {
+            Console.WriteLine("Error: Cannot determine executable path.");
+            return 1;
+        }
+
+        var serviceArgs = BuildServiceArgs(args);
+        var plistLabel = "uk.greepar.cfspeedtest.client";
+        var plistPath = $"/Library/LaunchDaemons/{plistLabel}.plist";
+
+        // 构建 ProgramArguments 数组
+        var programArgs = new List<string> { exePath };
+        programArgs.AddRange(SplitServiceArgs(serviceArgs));
+        programArgs.Add("--service");
+
+        var argsXml = string.Join("\n", programArgs.Select(a => $"    <string>{EscapeXml(a)}</string>"));
+
+        var plistContent = $"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>Label</key>
+              <string>{plistLabel}</string>
+              <key>ProgramArguments</key>
+              <array>
+            {argsXml}
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <true/>
+              <key>WorkingDirectory</key>
+              <string>{Path.GetDirectoryName(exePath)}</string>
+              <key>StandardOutPath</key>
+              <string>/tmp/cfspeedtest-client.log</string>
+              <key>StandardErrorPath</key>
+              <string>/tmp/cfspeedtest-client.err</string>
+            </dict>
+            </plist>
+            """;
+
+        Console.WriteLine($"Installing launchd service '{plistLabel}'...");
+
+        try
+        {
+            File.WriteAllText(plistPath, plistContent);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Console.WriteLine("Error: Permission denied. Run with sudo.");
+            return 1;
+        }
+
+        Console.WriteLine("Loading service...");
+        var result = RunProcess("launchctl", $"load {plistPath}");
+        if (result != 0)
+        {
+            Console.WriteLine("Service installed but failed to load. Check: sudo launchctl list | grep cfspeedtest");
+        }
+        else
+        {
+            Console.WriteLine("Service installed and started successfully.");
+        }
+
+        return 0;
+    }
+
+    private static int UninstallMacOS()
+    {
+        var plistLabel = "uk.greepar.cfspeedtest.client";
+        var plistPath = $"/Library/LaunchDaemons/{plistLabel}.plist";
+
+        Console.WriteLine($"Unloading launchd service '{plistLabel}'...");
+        RunProcess("launchctl", $"unload {plistPath}");
+
+        if (File.Exists(plistPath))
+        {
+            try
+            {
+                File.Delete(plistPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Console.WriteLine("Error: Permission denied. Run with sudo.");
+                return 1;
+            }
+        }
+
+        Console.WriteLine("Service uninstalled successfully.");
+        return 0;
+    }
+
+    // ---- Helpers ----
+
+    private static string BuildServiceArgs(string[] args)
+    {
+        // 保留除 --install / --uninstall / --service 之外的所有参数
+        var filtered = new List<string>();
+        for (int i = 0; i < args.Length; i++)
+        {
+            var normalized = args[i].Trim().TrimStart('-');
+            if (normalized.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("uninstall", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("service", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            filtered.Add(args[i]);
+        }
+
+        return string.Join(" ", filtered.Select(QuoteArgIfNeeded));
+    }
+
+    private static List<string> SplitServiceArgs(string serviceArgs)
+    {
+        // 简单拆分，保留引号内的内容
+        var result = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+
+        foreach (var ch in serviceArgs)
+        {
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+            }
+            else if (ch == ' ' && !inQuotes)
+            {
+                if (current.Length > 0)
+                {
+                    result.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(ch);
+            }
+        }
+
+        if (current.Length > 0)
+            result.Add(current.ToString());
+
+        return result;
+    }
+
+    private static string QuoteArgIfNeeded(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "\"\"";
+        if (!value.Any(char.IsWhiteSpace) && !value.Contains('"')) return value;
+        return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+
+    private static string EscapeXml(string value)
+    {
+        return value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+    }
+
+    private static int RunProcess(string fileName, string arguments)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc == null) return -1;
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            if (!string.IsNullOrWhiteSpace(stdout))
+                Console.WriteLine(stdout.TrimEnd());
+            if (!string.IsNullOrWhiteSpace(stderr) && proc.ExitCode != 0)
+                Console.WriteLine($"  [stderr] {stderr.TrimEnd()}");
+
+            return proc.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error running {fileName}: {ex.Message}");
+            return -1;
         }
     }
 }
