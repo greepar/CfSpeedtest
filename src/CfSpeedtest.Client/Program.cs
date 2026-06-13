@@ -17,9 +17,17 @@ using CfSpeedtest.Shared;
 //  Cloudflare IP 测速客户端 (NativeAOT Compatible)
 // ============================================================
 
+if (args.Length == 0 || HasFlag(args, "help") || HasFlag(args, "h") || HasFlag(args, "?"))
+{
+    PrintHelp();
+    return args.Length == 0 ? 1 : 0;
+}
+
 // 处理 --install / --uninstall 命令（优先于正常启动）
 if (HasFlag(args, "install"))
 {
+    if (!ValidateRequiredArgs(args, installing: true))
+        return 1;
     return ServiceInstaller.Install(args);
 }
 if (HasFlag(args, "uninstall"))
@@ -27,19 +35,27 @@ if (HasFlag(args, "uninstall"))
     return ServiceInstaller.Uninstall();
 }
 
+if (OperatingSystem.IsWindows() && HasFlag(args, "service") && !HasFlag(args, "service-worker"))
+{
+    return WindowsServiceWrapper.Run(args);
+}
+
+if (!ValidateRequiredArgs(args, installing: false))
+    return 1;
+
 Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
 Console.WriteLine();
 
 CleanupOldFiles();
 
 // 读取配置
-var serverUrl = GetArg(args, "server", "http://127.0.0.1:5000");
+var serverUrl = GetArg(args, "server", string.Empty);
 var explicitClientId = GetArg(args, "client-id", "");
 var ispStr = GetArg(args, "isp", "Telecom");
 var configuredClientName = GetArg(args, "name", Environment.MachineName);
 var intervalStr = GetArg(args, "interval", "60"); // 默认60分钟
 var autoUpdate = !HasFlag(args, "disable-auto-update");
-var isService = HasFlag(args, "service");
+var isService = HasFlag(args, "service") || HasFlag(args, "service-worker");
 var oneshot = HasFlag(args, "once");
 var currentVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
 var clientPlatform = DetectClientPlatform();
@@ -56,7 +72,12 @@ var proxySettings = new ClientProxySettings();
 using var transportState = new ClientTransportState(proxySettings);
 runtimeState.AppendLog("Client process starting");
 
-var intervalMinutes = int.Parse(intervalStr);
+if (!int.TryParse(intervalStr, out var intervalMinutes) || intervalMinutes <= 0)
+{
+    Console.WriteLine($"Invalid interval: {intervalStr}");
+    PrintHelp();
+    return 1;
+}
 Console.WriteLine($"Server:   {serverUrl}");
 Console.WriteLine($"ISP:      {runtimeProfile.Isp}");
 Console.WriteLine($"Name:     {runtimeProfile.Name}");
@@ -1027,6 +1048,78 @@ static bool HasFlag(string[] args, string flag)
     return false;
 }
 
+static bool HasArgValue(string[] args, string key)
+{
+    var normalizedKey = NormalizeArgKey(key);
+    for (int i = 0; i < args.Length - 1; i++)
+    {
+        if (NormalizeArgKey(args[i]).Equals(normalizedKey, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(args[i + 1]) &&
+            !args[i + 1].StartsWith('-'))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ValidateRequiredArgs(string[] args, bool installing)
+{
+    if (!HasArgValue(args, "server"))
+    {
+        Console.WriteLine(installing
+            ? "Missing required option for install: --server <url>"
+            : "Missing required option: --server <url>");
+        Console.WriteLine();
+        PrintHelp();
+        return false;
+    }
+
+    if (HasArgValue(args, "isp"))
+    {
+        var isp = GetArg(args, "isp", string.Empty);
+        if (!Enum.TryParse<IspType>(isp, true, out _))
+        {
+            Console.WriteLine($"Invalid ISP: {isp}, options: Telecom, Unicom, Mobile");
+            Console.WriteLine();
+            PrintHelp();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void PrintHelp()
+{
+    Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
+    Console.WriteLine();
+    Console.WriteLine("Usage:");
+    Console.WriteLine("  CfSpeedtest.Client --server <url> [options]");
+    Console.WriteLine("  CfSpeedtest.Client --install --server <url> [options]");
+    Console.WriteLine("  CfSpeedtest.Client --uninstall");
+    Console.WriteLine();
+    Console.WriteLine("Required:");
+    Console.WriteLine("  --server <url>              Server URL, e.g. http://127.0.0.1:5000");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --client-id <id>            Existing or reserved client id (optional)");
+    Console.WriteLine("  --isp <Telecom|Unicom|Mobile>  ISP, default: Telecom");
+    Console.WriteLine("  --name <name>               Client display name, default: machine name");
+    Console.WriteLine("  --interval <minutes>        Default local interval, default: 60");
+    Console.WriteLine("  --once                      Run one test cycle after server trigger and exit");
+    Console.WriteLine("  --disable-auto-update       Disable client auto update");
+    Console.WriteLine("  --service                   Internal flag for service mode");
+    Console.WriteLine("  --install                   Install and start native OS service");
+    Console.WriteLine("  --uninstall                 Stop and remove native OS service");
+    Console.WriteLine("  --help                      Show this help");
+    Console.WriteLine();
+    Console.WriteLine("Examples:");
+    Console.WriteLine("  CfSpeedtest.Client --server http://127.0.0.1:5000 --isp Telecom --name node-1");
+    Console.WriteLine("  CfSpeedtest.Client --install --server http://127.0.0.1:5000 --client-id abc --isp Unicom --name node-2");
+    Console.WriteLine("  CfSpeedtest.Client --uninstall");
+}
+
 static string NormalizeArgKey(string value)
 {
     return value.Trim().TrimStart('-').TrimStart('-');
@@ -1510,27 +1603,33 @@ static class ServiceInstaller
 
         // 构建服务运行时参数（排除 --install 和 --uninstall）
         var serviceArgs = BuildServiceArgs(args);
-        var binPath = $"\"{exePath}\" {serviceArgs} --service";
+        var binPath = string.IsNullOrWhiteSpace(serviceArgs)
+            ? $"\"{exePath}\" --service"
+            : $"\"{exePath}\" {serviceArgs} --service";
 
         Console.WriteLine($"Installing Windows service '{ServiceName}'...");
 
-        // 创建服务
-        var result = RunProcess("sc.exe", $"create {ServiceName} binPath= \"{binPath}\" start= auto DisplayName= \"{DisplayName}\"");
+        var exists = RunProcess("sc.exe", "query", ServiceName) == 0;
+        var result = exists
+            ? RunProcess("sc.exe", "config", ServiceName, "binPath=", binPath, "start=", "auto", "DisplayName=", DisplayName)
+            : RunProcess("sc.exe", "create", ServiceName, "binPath=", binPath, "start=", "auto", "DisplayName=", DisplayName);
         if (result != 0)
         {
-            Console.WriteLine("Failed to create service. Make sure you run as Administrator.");
+            Console.WriteLine(exists
+                ? "Failed to update service. Make sure you run as Administrator."
+                : "Failed to create service. Make sure you run as Administrator.");
             return 1;
         }
 
         // 设置描述
-        RunProcess("sc.exe", $"description {ServiceName} \"{Description}\"");
+        RunProcess("sc.exe", "description", ServiceName, Description);
 
         // 设置失败后自动重启
-        RunProcess("sc.exe", $"failure {ServiceName} reset= 60 actions= restart/5000/restart/10000/restart/30000");
+        RunProcess("sc.exe", "failure", ServiceName, "reset=", "60", "actions=", "restart/5000/restart/10000/restart/30000");
 
         // 启动服务
         Console.WriteLine("Starting service...");
-        result = RunProcess("sc.exe", $"start {ServiceName}");
+        result = RunProcess("sc.exe", "start", ServiceName);
         if (result != 0)
         {
             Console.WriteLine("Service created but failed to start. You can start it manually with: sc start CfSpeedtestClient");
@@ -1546,13 +1645,13 @@ static class ServiceInstaller
     private static int UninstallWindows()
     {
         Console.WriteLine($"Stopping Windows service '{ServiceName}'...");
-        RunProcess("sc.exe", $"stop {ServiceName}");
+        RunProcess("sc.exe", "stop", ServiceName);
 
         // 等待服务停止
         Thread.Sleep(2000);
 
         Console.WriteLine($"Removing Windows service '{ServiceName}'...");
-        var result = RunProcess("sc.exe", $"delete {ServiceName}");
+        var result = RunProcess("sc.exe", "delete", ServiceName);
         if (result != 0)
         {
             Console.WriteLine("Failed to remove service. Make sure you run as Administrator.");
@@ -1586,7 +1685,7 @@ static class ServiceInstaller
 
             [Service]
             Type=simple
-            ExecStart={exePath} {serviceArgs} --service
+            ExecStart={QuoteSystemdArg(exePath)} {serviceArgs} --service
             Restart=always
             RestartSec=5
             WorkingDirectory={Path.GetDirectoryName(exePath)}
@@ -1811,9 +1910,53 @@ static class ServiceInstaller
         return "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 
+    private static string QuoteSystemdArg(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "\"\"";
+        if (!value.Any(char.IsWhiteSpace) && !value.Contains('"')) return value;
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
     private static string EscapeXml(string value)
     {
         return value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+    }
+
+    private static int RunProcess(string fileName, params string[] arguments)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = fileName,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            foreach (var argument in arguments)
+                psi.ArgumentList.Add(argument);
+
+            using var proc = Process.Start(psi);
+            if (proc == null) return -1;
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            if (!string.IsNullOrWhiteSpace(stdout))
+                Console.WriteLine(stdout.TrimEnd());
+            if (!string.IsNullOrWhiteSpace(stderr) && proc.ExitCode != 0)
+                Console.WriteLine($"  [stderr] {stderr.TrimEnd()}");
+
+            return proc.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error running {fileName}: {ex.Message}");
+            return -1;
+        }
     }
 
     private static int RunProcess(string fileName, string arguments)
@@ -1850,4 +1993,188 @@ static class ServiceInstaller
             return -1;
         }
     }
+}
+
+// ============================================================
+//  Windows Service wrapper
+// ============================================================
+static class WindowsServiceWrapper
+{
+    private const string ServiceName = "CfSpeedtestClient";
+    private const int SERVICE_WIN32_OWN_PROCESS = 0x00000010;
+    private const int SERVICE_STOPPED = 0x00000001;
+    private const int SERVICE_START_PENDING = 0x00000002;
+    private const int SERVICE_STOP_PENDING = 0x00000003;
+    private const int SERVICE_RUNNING = 0x00000004;
+    private const int SERVICE_ACCEPT_STOP = 0x00000001;
+    private const int SERVICE_ACCEPT_SHUTDOWN = 0x00000004;
+    private const int SERVICE_CONTROL_STOP = 0x00000001;
+    private const int SERVICE_CONTROL_SHUTDOWN = 0x00000005;
+
+    private static string[] _args = [];
+    private static IntPtr _statusHandle;
+    private static Process? _worker;
+    private static ServiceMainDelegate? _serviceMain;
+    private static ServiceControlHandlerEx? _controlHandler;
+
+    public static int Run(string[] args)
+    {
+        _args = args;
+        _serviceMain = ServiceMain;
+
+        var serviceTable = new SERVICE_TABLE_ENTRY[2];
+        serviceTable[0] = new SERVICE_TABLE_ENTRY
+        {
+            lpServiceName = ServiceName,
+            lpServiceProc = _serviceMain,
+        };
+
+        if (!StartServiceCtrlDispatcher(serviceTable))
+        {
+            Console.WriteLine($"StartServiceCtrlDispatcher failed: {Marshal.GetLastWin32Error()}");
+            return 1;
+        }
+
+        return 0;
+    }
+
+    private static void ServiceMain(int argc, IntPtr argv)
+    {
+        _controlHandler = ControlHandler;
+        _statusHandle = RegisterServiceCtrlHandlerEx(ServiceName, _controlHandler, IntPtr.Zero);
+        if (_statusHandle == IntPtr.Zero)
+            return;
+
+        SetStatus(SERVICE_START_PENDING, 0, 30000);
+
+        try
+        {
+            StartWorkerProcess();
+            SetStatus(SERVICE_RUNNING, SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN, 0);
+            _worker?.WaitForExit();
+        }
+        catch
+        {
+            // 服务入口不能把异常抛回 SCM，否则服务状态会残留在启动中。
+        }
+        finally
+        {
+            SetStatus(SERVICE_STOPPED, 0, 0);
+        }
+    }
+
+    private static int ControlHandler(int control, int eventType, IntPtr eventData, IntPtr context)
+    {
+        if (control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN)
+        {
+            SetStatus(SERVICE_STOP_PENDING, 0, 30000);
+            StopWorkerProcess();
+        }
+
+        return 0;
+    }
+
+    private static void StartWorkerProcess()
+    {
+        var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrWhiteSpace(exePath))
+            throw new InvalidOperationException("Cannot determine executable path.");
+
+        var workerArgs = new List<string>();
+        var replaced = false;
+        foreach (var arg in _args)
+        {
+            if (NormalizeWorkerArgKey(arg).Equals("service", StringComparison.OrdinalIgnoreCase))
+            {
+                workerArgs.Add("--service-worker");
+                replaced = true;
+                continue;
+            }
+            workerArgs.Add(arg);
+        }
+        if (!replaced)
+            workerArgs.Add("--service-worker");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = exePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory,
+        };
+        foreach (var arg in workerArgs)
+            psi.ArgumentList.Add(arg);
+
+        _worker = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start service worker process.");
+    }
+
+    private static string NormalizeWorkerArgKey(string value)
+    {
+        return value.Trim().TrimStart('-').TrimStart('-');
+    }
+
+    private static void StopWorkerProcess()
+    {
+        try
+        {
+            if (_worker is { HasExited: false })
+            {
+                _worker.Kill(entireProcessTree: true);
+                _worker.WaitForExit(10000);
+            }
+        }
+        catch
+        {
+            // ignore stop cleanup failures
+        }
+    }
+
+    private static void SetStatus(int state, int controlsAccepted, int waitHint)
+    {
+        if (_statusHandle == IntPtr.Zero)
+            return;
+
+        var status = new SERVICE_STATUS
+        {
+            dwServiceType = SERVICE_WIN32_OWN_PROCESS,
+            dwCurrentState = state,
+            dwControlsAccepted = controlsAccepted,
+            dwWin32ExitCode = 0,
+            dwServiceSpecificExitCode = 0,
+            dwCheckPoint = state == SERVICE_START_PENDING || state == SERVICE_STOP_PENDING ? 1 : 0,
+            dwWaitHint = waitHint,
+        };
+        SetServiceStatus(_statusHandle, ref status);
+    }
+
+    private delegate void ServiceMainDelegate(int argc, IntPtr argv);
+    private delegate int ServiceControlHandlerEx(int control, int eventType, IntPtr eventData, IntPtr context);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SERVICE_TABLE_ENTRY
+    {
+        public string? lpServiceName;
+        public ServiceMainDelegate? lpServiceProc;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SERVICE_STATUS
+    {
+        public int dwServiceType;
+        public int dwCurrentState;
+        public int dwControlsAccepted;
+        public int dwWin32ExitCode;
+        public int dwServiceSpecificExitCode;
+        public int dwCheckPoint;
+        public int dwWaitHint;
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool StartServiceCtrlDispatcher([In] SERVICE_TABLE_ENTRY[] lpServiceStartTable);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr RegisterServiceCtrlHandlerEx(string lpServiceName, ServiceControlHandlerEx lpHandlerProc, IntPtr lpContext);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool SetServiceStatus(IntPtr hServiceStatus, ref SERVICE_STATUS lpServiceStatus);
 }

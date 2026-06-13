@@ -11,9 +11,40 @@ permissions:
 
 env:
   DOTNET_VERSION: "10.0.x"
+  NODE_VERSION: "22"
   PROJECT_PATH: "src/CfSpeedtest.Client/CfSpeedtest.Client.csproj"
+  SERVER_PROJECT_PATH: "src/CfSpeedtest.Server/CfSpeedtest.Server.csproj"
+  WEB_PATH: "src/web"
 
 jobs:
+  build-web-and-server:
+    name: Build WebUI and Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.WEB_PATH }}/package-lock.json
+
+      - name: Build WebUI
+        run: |
+          npm ci
+          npm run build
+        working-directory: ${{ env.WEB_PATH }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build Server
+        run: dotnet build ${{ env.SERVER_PROJECT_PATH }} -c Release
+
   build-and-package:
     name: Build (${{ matrix.rid }})
     runs-on: ${{ matrix.runner }}
@@ -167,6 +198,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs:
+      - build-web-and-server
       - build-and-package
       - build-musl-x64
       - build-musl-arm64

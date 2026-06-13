@@ -10,11 +10,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
+    <Version>1.8.2</Version>
+    <AssemblyVersion>1.8.2.0</AssemblyVersion>
+    <FileVersion>1.8.2.0</FileVersion>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
 
-  <!-- 确保 wwwroot 在 build 和 publish 时都复制到输出目录 -->
+  <!-- WebUI 资源编译进程序集。发布单文件时不依赖 wwwroot 或 staticwebassets 清单。 -->
   <ItemGroup>
-    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Remove="wwwroot\**" />
+    <None Remove="wwwroot\**" />
+    <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

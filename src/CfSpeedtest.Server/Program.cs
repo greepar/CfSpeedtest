@@ -1,12 +1,14 @@
 using System.Text.Json;
 using System.Net.WebSockets;
 using System.IO;
+using System.Reflection;
 using CfSpeedtest.Server.Services;
 using CfSpeedtest.Shared;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.StaticFiles;
 
 var builder = WebApplication.CreateBuilder(args);
 var clientUpdatesDir = Path.Combine(builder.Environment.ContentRootPath, "client-updates");
@@ -47,6 +49,8 @@ builder.Services.AddSingleton<WebUiAuthService>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
+var embeddedWebAssets = BuildEmbeddedWebAssetMap();
+var embeddedContentTypes = new FileExtensionContentTypeProvider();
 app.Services.GetRequiredService<WebUiAuthService>().EnsureInitialized(app.Services.GetRequiredService<DataStore>());
 app.Lifetime.ApplicationStopping.Register(() =>
 {
@@ -93,6 +97,13 @@ app.UseWebSockets(new WebSocketOptions
 });
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.Use(async (context, next) =>
+{
+    if (await TryServeEmbeddedWebAssetAsync(context, embeddedWebAssets, embeddedContentTypes))
+        return;
+
+    await next();
+});
 if (!string.IsNullOrWhiteSpace(materialWebDir))
 {
     app.UseStaticFiles(new StaticFileOptions
@@ -696,6 +707,23 @@ app.MapPost("/api/auth/change-password", (WebUiChangePasswordRequest req, DataSt
     return changed
         ? ApiResponse<string>.Ok("登录凭据已更新，请重新登录")
         : ApiResponse<string>.Fail("当前密码错误或新凭据无效");
+});
+
+app.MapGet("/api/server/info", () =>
+{
+    var version = Assembly.GetExecutingAssembly()
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+        ?.InformationalVersion;
+
+    if (string.IsNullOrWhiteSpace(version))
+    {
+        version = Assembly.GetExecutingAssembly().GetName().Version?.ToString();
+    }
+
+    return ApiResponse<ServerInfo>.Ok(new ServerInfo
+    {
+        Version = string.IsNullOrWhiteSpace(version) ? "unknown" : version
+    });
 });
 
 app.MapPost("/api/clients/{clientId}/trigger-update", (string clientId, DataStore store, RoundCoordinatorService rounds) =>
@@ -1397,6 +1425,77 @@ static bool RequiresWebUiAuth(PathString path)
         return false;
 
     return value.StartsWith("/api/", StringComparison.OrdinalIgnoreCase);
+}
+
+static Dictionary<string, string> BuildEmbeddedWebAssetMap()
+{
+    const string Prefix = "wwwroot/";
+    var assembly = Assembly.GetExecutingAssembly();
+    var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var resourceName in assembly.GetManifestResourceNames())
+    {
+        if (!resourceName.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            continue;
+
+        var path = "/" + resourceName[Prefix.Length..].Replace('\\', '/');
+        result[path] = resourceName;
+    }
+
+    return result;
+}
+
+static async Task<bool> TryServeEmbeddedWebAssetAsync(HttpContext context, IReadOnlyDictionary<string, string> assets, FileExtensionContentTypeProvider contentTypes)
+{
+    if (assets.Count == 0)
+        return false;
+    if (context.Request.Method != HttpMethods.Get && context.Request.Method != HttpMethods.Head)
+        return false;
+    if (!IsEmbeddedWebAssetCandidate(context.Request.Path))
+        return false;
+
+    var path = context.Request.Path.Value ?? "/";
+    if (string.IsNullOrWhiteSpace(path) || path == "/")
+        path = "/index.html";
+    if (path.Contains("..", StringComparison.Ordinal))
+        return false;
+
+    if (!assets.TryGetValue(path, out var resourceName) && !Path.HasExtension(path))
+    {
+        assets.TryGetValue("/index.html", out resourceName);
+    }
+    if (string.IsNullOrWhiteSpace(resourceName))
+        return false;
+
+    var assembly = Assembly.GetExecutingAssembly();
+    await using var stream = assembly.GetManifestResourceStream(resourceName);
+    if (stream is null)
+        return false;
+
+    if (!contentTypes.TryGetContentType(path, out var contentType))
+        contentType = "application/octet-stream";
+    if (path.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase))
+        context.Response.Headers.CacheControl = "public,max-age=31536000,immutable";
+    context.Response.ContentType = contentType;
+    context.Response.ContentLength = stream.Length;
+    if (context.Request.Method != HttpMethods.Head)
+        await stream.CopyToAsync(context.Response.Body);
+    return true;
+}
+
+static bool IsEmbeddedWebAssetCandidate(PathString path)
+{
+    var value = path.Value ?? string.Empty;
+    if (value.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/api", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/client-updates/", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/material-web/", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/install/client/", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("/i/", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    return true;
 }
 
 static string GenerateBootstrapTokenCode(DataStore store)

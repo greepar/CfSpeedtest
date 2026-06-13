@@ -427,6 +427,12 @@ public class WebUiAuthStatus
     public string Username { get; set; } = string.Empty;
 }
 
+public class ServerInfo
+{
+    public string Name { get; set; } = "CfSpeedtest";
+    public string Version { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// 客户端请求补拉未测过 IP 的请求
 /// </summary>

@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===================== 设计令牌：亮色（默认） ===================== */
+:root {
+  color-scheme: light;
+
+  --c-surface: 247 248 250; /* 页面背景 slate-50ish */
+  --c-surface-2: 241 243 246;
+  --c-card: 255 255 255; /* 卡片 */
+  --c-card-hover: 248 250 252;
+  --c-border: 226 230 236;
+  --c-border-strong: 209 214 222;
+
+  --c-fg: 17 24 39; /* 主文字 slate-900 */
+  --c-fg-muted: 82 92 106; /* 次要 */
+  --c-fg-subtle: 138 147 161; /* 更弱 */
+
+  --c-primary: 79 70 229; /* indigo-600 */
+  --c-primary-fg: 255 255 255;
+  --c-primary-soft: 238 238 255;
+  --c-primary-hover: 67 56 202; /* indigo-700 */
+
+  --c-success: 22 163 74;
+  --c-success-soft: 220 247 230;
+  --c-warning: 202 138 4;
+  --c-warning-soft: 254 246 219;
+  --c-danger: 220 38 38;
+  --c-danger-soft: 254 231 231;
+  --c-info: 37 99 235;
+  --c-info-soft: 226 238 255;
+}
+
+/* ===================== 设计令牌：暗色 ===================== */
+.dark {
+  color-scheme: dark;
+
+  --c-surface: 15 18 24; /* 深灰蓝背景 */
+  --c-surface-2: 19 23 31;
+  --c-card: 23 28 38; /* 卡片 */
+  --c-card-hover: 30 36 48;
+  --c-border: 38 45 58;
+  --c-border-strong: 52 61 77;
+
+  --c-fg: 229 233 240;
+  --c-fg-muted: 154 163 178;
+  --c-fg-subtle: 110 120 136;
+
+  --c-primary: 129 140 248; /* indigo-400 */
+  --c-primary-fg: 17 20 28;
+  --c-primary-soft: 39 41 71;
+  --c-primary-hover: 165 180 252;
+
+  --c-success: 74 222 128;
+  --c-success-soft: 22 50 38;
+  --c-warning: 250 204 21;
+  --c-warning-soft: 54 46 18;
+  --c-danger: 248 113 113;
+  --c-danger-soft: 56 26 30;
+  --c-info: 96 165 250;
+  --c-info-soft: 24 40 66;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(var(--c-surface));
+  color: rgb(var(--c-fg));
+  font-family: theme("fontFamily.sans");
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-border-strong));
+  border-radius: 9999px;
+  border: 2px solid rgb(var(--c-surface));
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--c-fg-subtle));
+}
+
+/* 选区 */
+::selection {
+  background: rgb(var(--c-primary) / 0.25);
+}
