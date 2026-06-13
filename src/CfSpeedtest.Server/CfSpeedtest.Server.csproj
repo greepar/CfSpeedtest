@@ -14,12 +14,15 @@
     <AssemblyVersion>1.8.2.0</AssemblyVersion>
     <FileVersion>1.8.2.0</FileVersion>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
   </PropertyGroup>
 
   <!-- WebUI 资源编译进程序集。发布单文件时不依赖 wwwroot 或 staticwebassets 清单。 -->
   <ItemGroup>
     <Content Remove="wwwroot\**" />
     <None Remove="wwwroot\**" />
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+    <Content Update="web.config" CopyToPublishDirectory="Never" />
     <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
