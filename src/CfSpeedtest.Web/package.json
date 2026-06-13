@@ -1,5 +1,5 @@
 {
-  "name": "cfspeedtest-web",
+  "name": "cfspeedtest.web",
   "private": true,
   "version": "2.0.0",
   "type": "module",

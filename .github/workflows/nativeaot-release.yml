@@ -14,7 +14,7 @@ env:
   NODE_VERSION: "22"
   PROJECT_PATH: "src/CfSpeedtest.Client/CfSpeedtest.Client.csproj"
   SERVER_PROJECT_PATH: "src/CfSpeedtest.Server/CfSpeedtest.Server.csproj"
-  WEB_PATH: "src/web"
+  WEB_PATH: "src/CfSpeedtest.Web"
 
 jobs:
   build-web-and-server:

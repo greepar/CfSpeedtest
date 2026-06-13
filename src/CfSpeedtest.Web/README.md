@@ -1,4 +1,4 @@
-# CfSpeedtest Web
+# CfSpeedtest.Web
 
 React + TypeScript + Tailwind CSS 管理面板源码。
 

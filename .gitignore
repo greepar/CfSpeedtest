@@ -15,5 +15,5 @@ src/**/bin/
 src/**/obj/
 docs/node_modules/
 docs/.vitepress/dist/
-src/web/node_modules/
-src/web/dist/
+src/CfSpeedtest.Web/node_modules/
+src/CfSpeedtest.Web/dist/
