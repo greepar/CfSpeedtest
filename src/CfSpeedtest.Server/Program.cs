@@ -95,8 +95,12 @@ app.UseWebSockets(new WebSocketOptions
 {
     KeepAliveInterval = TimeSpan.FromSeconds(15)
 });
-app.UseDefaultFiles();
-app.UseStaticFiles();
+var wwwrootPhysicalDir = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
+if (Directory.Exists(wwwrootPhysicalDir))
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
 app.Use(async (context, next) =>
 {
     if (await TryServeEmbeddedWebAssetAsync(context, embeddedWebAssets, embeddedContentTypes))
@@ -935,7 +939,18 @@ app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 // ============================================================
 app.MapGet("/api/clients", (DataStore store) =>
 {
-    return ApiResponse<List<ClientInfo>>.Ok(store.GetClients());
+    var config = store.GetConfig();
+    var onlineWindow = TimeSpan.FromSeconds(Math.Max(30, config.HeartbeatIntervalSeconds * 3));
+    var now = DateTime.UtcNow;
+    var clients = store.GetClients();
+    foreach (var client in clients)
+    {
+        client.IsOnline = client.Allowed &&
+                          client.LastSeenAt != DateTime.MinValue &&
+                          (now - client.LastSeenAt.ToUniversalTime()) <= onlineWindow;
+    }
+
+    return ApiResponse<List<ClientInfo>>.Ok(clients);
 });
 
 // ============================================================

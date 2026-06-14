@@ -36,7 +36,7 @@ export function AppShell({ page, setPage, username, version, onLogout, onPasswor
           return <button key={n.key} onClick={() => { setPage(n.key); setOpen(false); }} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition", active ? "bg-primary-soft text-primary" : "text-fg-muted hover:bg-card-hover hover:text-fg")}><Icon className="h-4 w-4" />{n.label}</button>;
         })}
       </nav>
-      <div className="border-t border-border p-4 text-xs text-fg-subtle">CfSpeedtest {version ? `v${version}` : ""}</div>
+      <div className="border-t border-border p-4 text-xs text-fg-subtle truncate">CfSpeedtest {version ? `v${version.split("+")[0]}` : ""}</div>
     </aside>
   );
   return (

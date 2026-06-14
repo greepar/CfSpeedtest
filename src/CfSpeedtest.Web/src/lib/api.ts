@@ -60,10 +60,15 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   let json: ApiResponse<T> | null = null;
   const text = await res.text();
   if (text) {
+    let raw: unknown;
     try {
-      json = toCamel(JSON.parse(text)) as ApiResponse<T>;
+      raw = JSON.parse(text);
     } catch {
       throw new ApiError(`服务端返回了非 JSON 响应 (${res.status})`, res.status);
+    }
+    json = normalizeApiResponse(raw) as ApiResponse<T> | null;
+    if (json === null) {
+      throw new ApiError(`服务端返回了非 ApiResponse 格式 (${res.status})`, res.status);
     }
   }
 
@@ -80,15 +85,21 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   return (json as unknown as T) ?? (undefined as T);
 }
 
-function toCamel(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(toCamel);
-  if (!value || typeof value !== "object") return value;
-  const out: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(value)) {
-    const next = key ? key[0].toLowerCase() + key.slice(1) : key;
-    out[next] = toCamel(val);
-  }
-  return out;
+function normalizeApiResponse(raw: unknown): ApiResponse<unknown> | null {
+  if (Array.isArray(raw) || !raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const successKey = obj.success !== undefined ? "success" : obj.Success !== undefined ? "Success" : null;
+  if (successKey === null) return null;
+  const success = obj[successKey];
+  const messageKey = obj.message !== undefined ? "message" : obj.Message !== undefined ? "Message" : null;
+  const message = messageKey ? obj[messageKey] : null;
+  const dataKey = obj.data !== undefined ? "data" : obj.Data !== undefined ? "Data" : null;
+  const data = dataKey ? obj[dataKey] : null;
+  return {
+    success: typeof success === "boolean" ? success : false,
+    message: typeof message === "string" ? message : null,
+    data,
+  };
 }
 
 export const api = {

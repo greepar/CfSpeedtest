@@ -26,4 +26,9 @@
     <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- 构建 Server 前自动运行前端构建（npm/node 不可用时跳过，不阻断编译） -->
+  <Target Name="BuildWebUi" BeforeTargets="CoreCompile" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="npm run build" WorkingDirectory="..\CfSpeedtest.Web" ContinueOnError="true" IgnoreExitCode="true" />
+  </Target>
+
 </Project>
