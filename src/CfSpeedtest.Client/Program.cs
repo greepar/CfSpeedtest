@@ -455,6 +455,16 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         Console.WriteLine("Extracting update package...");
         ZipFile.ExtractToDirectory(tempFile, stagingDir, true);
 
+        if (isService && OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("Scheduling Windows service update and restart...");
+            ScheduleWindowsServiceUpdate(stagingDir, targetDir);
+            TryDeleteDirectory(downloadDir);
+            stagingDir = null;
+            downloadDir = null;
+            Environment.Exit(0);
+        }
+
         Console.WriteLine("Applying update files...");
         await ApplyUpdateInPlaceAsync(stagingDir, targetDir);
         TryDeleteDirectory(stagingDir);
@@ -1343,6 +1353,70 @@ static async Task ApplyUpdateInPlaceAsync(string stagingDir, string targetDir)
     }
 
     await Task.CompletedTask;
+}
+
+static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
+{
+    var scriptPath = Path.Combine(Path.GetTempPath(), $"cfspeedtest-service-update-{Guid.NewGuid():N}.ps1");
+    var script = """
+        param(
+            [string]$ServiceName,
+            [string]$StagingDir,
+            [string]$TargetDir,
+            [string]$ScriptPath
+        )
+
+        $ErrorActionPreference = 'Stop'
+        Start-Sleep -Seconds 2
+
+        try { sc.exe stop $ServiceName | Out-Null } catch { }
+
+        $deadline = (Get-Date).AddSeconds(60)
+        do {
+            Start-Sleep -Seconds 1
+            $status = sc.exe query $ServiceName | Out-String
+            if ($status -match 'STATE\s+:\s+\d+\s+STOPPED') { break }
+        } while ((Get-Date) -lt $deadline)
+
+        Get-ChildItem -LiteralPath $StagingDir -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($StagingDir.Length).TrimStart('\', '/')
+            $destination = Join-Path $TargetDir $relative
+            $destinationDir = Split-Path -Parent $destination
+            if (-not (Test-Path -LiteralPath $destinationDir)) {
+                New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+        }
+
+        Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        sc.exe start $ServiceName | Out-Null
+        Start-Sleep -Seconds 3
+        Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+        """;
+
+    File.WriteAllText(scriptPath, script, Encoding.UTF8);
+
+    var psi = new ProcessStartInfo
+    {
+        FileName = "powershell.exe",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    psi.ArgumentList.Add("-NoProfile");
+    psi.ArgumentList.Add("-ExecutionPolicy");
+    psi.ArgumentList.Add("Bypass");
+    psi.ArgumentList.Add("-File");
+    psi.ArgumentList.Add(scriptPath);
+    psi.ArgumentList.Add("-ServiceName");
+    psi.ArgumentList.Add("CfSpeedtestClient");
+    psi.ArgumentList.Add("-StagingDir");
+    psi.ArgumentList.Add(stagingDir);
+    psi.ArgumentList.Add("-TargetDir");
+    psi.ArgumentList.Add(targetDir);
+    psi.ArgumentList.Add("-ScriptPath");
+    psi.ArgumentList.Add(scriptPath);
+
+    Process.Start(psi);
 }
 
 static void TryDeleteDirectory(string? path)
