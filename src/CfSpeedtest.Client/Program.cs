@@ -393,6 +393,14 @@ static async Task PostReportWithRetryAsync(string serverUrl, string reportJson, 
 
 static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
 {
+    if (!await ClientUpdateLock.Semaphore.WaitAsync(0))
+    {
+        Console.WriteLine("Update check skipped: another update check is already running.");
+        return;
+    }
+
+    string? downloadDir = null;
+    string? stagingDir = null;
     try
     {
         var resp = await httpClient.GetAsync($"{serverUrl}/api/client/update?version={Uri.EscapeDataString(currentVersion)}&platform={Uri.EscapeDataString(clientPlatform)}");
@@ -422,7 +430,9 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
             return;
         }
 
-        var tempFile = Path.Combine(Path.GetTempPath(), Path.GetFileName(new Uri(info.DownloadUrl).AbsolutePath));
+        downloadDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-update-download-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(downloadDir);
+        var tempFile = Path.Combine(downloadDir, Path.GetFileName(new Uri(info.DownloadUrl).AbsolutePath));
         Console.WriteLine("Downloading update package...");
         using (var download = await httpClient.GetStreamAsync(info.DownloadUrl))
         using (var file = File.Create(tempFile))
@@ -439,7 +449,7 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         }
 
         var targetDir = Path.GetDirectoryName(currentExe)!;
-        var stagingDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-update-{Guid.NewGuid():N}");
+        stagingDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-update-{Guid.NewGuid():N}");
         Directory.CreateDirectory(stagingDir);
 
         Console.WriteLine("Extracting update package...");
@@ -448,7 +458,9 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         Console.WriteLine("Applying update files...");
         await ApplyUpdateInPlaceAsync(stagingDir, targetDir);
         TryDeleteDirectory(stagingDir);
-        TryDeleteFile(tempFile);
+        TryDeleteDirectory(downloadDir);
+        stagingDir = null;
+        downloadDir = null;
 
         if (isService)
         {
@@ -464,6 +476,12 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
     catch (Exception ex)
     {
         Console.WriteLine($"Update check failed: {ex.Message}");
+    }
+    finally
+    {
+        TryDeleteDirectory(stagingDir);
+        TryDeleteDirectory(downloadDir);
+        ClientUpdateLock.Semaphore.Release();
     }
 }
 
@@ -2210,4 +2228,9 @@ static class WindowsServiceWrapper
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool SetServiceStatus(IntPtr hServiceStatus, ref SERVICE_STATUS lpServiceStatus);
+}
+
+static class ClientUpdateLock
+{
+    public static readonly SemaphoreSlim Semaphore = new(1, 1);
 }
