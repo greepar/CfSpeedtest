@@ -599,9 +599,12 @@ static Task StartHeartbeatLoopAsync(
                 }
 
                 wsFallbackUntilUtc = DateTime.UtcNow.AddSeconds(60);
+                inFallbackWindow = true;
                 Console.WriteLine("WebSocket failed repeatedly. Entering HTTP heartbeat fallback for 60 seconds.");
             }
 
+            var heartbeatSucceeded = false;
+            Exception? heartbeatError = null;
             try
             {
                 var snapshot = runtimeProfile.GetSnapshot();
@@ -629,6 +632,7 @@ static Task StartHeartbeatLoopAsync(
                 var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
+                    heartbeatSucceeded = true;
                     ApplyAuthoritativeClientMetadata(serverUrl, clientId, isService, runtimeProfile, proxySettings, transportState, result.Data.EffectiveIsp, result.Data.EffectiveName, result.Data.EffectiveProxyMode, result.Data.EffectiveProxyUrl);
                     if (result.Data.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
                     {
@@ -648,12 +652,28 @@ static Task StartHeartbeatLoopAsync(
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
                 // 心跳失败不打断主测速流程
+                heartbeatError = ex;
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cancellationToken);
+            if (heartbeatSucceeded)
+            {
+                wsConsecutiveFailures = 0;
+                wsFallbackUntilUtc = null;
+                Console.WriteLine("HTTP heartbeat restored. Retrying WebSocket heartbeat.");
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                continue;
+            }
+
+            if (heartbeatError is not null)
+            {
+                Console.WriteLine($"HTTP heartbeat fallback failed: {heartbeatError.Message}");
+            }
+
+            var retrySeconds = inFallbackWindow ? Math.Min(intervalSeconds, 10) : intervalSeconds;
+            await Task.Delay(TimeSpan.FromSeconds(retrySeconds), cancellationToken);
         }
     }, cancellationToken);
 }
@@ -672,13 +692,19 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
     SemaphoreSlim immediateFetchSignal,
     CancellationToken cancellationToken)
 {
+    const int WsConnectTimeoutSeconds = 10;
+    const int WsIdleTimeoutSeconds = 90;
     var connected = false;
     try
     {
         using var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
         var wsUrl = BuildWebSocketUrl(serverUrl, clientId, runtimeProfile.Isp);
-        await ws.ConnectAsync(new Uri(wsUrl), cancellationToken);
+        using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            connectCts.CancelAfter(TimeSpan.FromSeconds(WsConnectTimeoutSeconds));
+            await ws.ConnectAsync(new Uri(wsUrl), connectCts.Token);
+        }
         connected = true;
         Console.WriteLine("WebSocket heartbeat connected.");
 
@@ -688,7 +714,9 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
             var receiveBuffer = new byte[8192];
             while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
             {
-                var body = await ReceiveWebSocketTextMessageAsync(ws, receiveBuffer, cancellationToken);
+                using var receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                receiveCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(WsIdleTimeoutSeconds, intervalSeconds * 3)));
+                var body = await ReceiveWebSocketTextMessageAsync(ws, receiveBuffer, receiveCts.Token);
                 if (body is null)
                     break;
                 var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
@@ -727,7 +755,12 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
             var json = JsonSerializer.Serialize(heartbeat, AppJsonContext.Default.ClientWsMessage);
             var bytes = Encoding.UTF8.GetBytes(json);
             await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
-            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cancellationToken);
+            var delayTask = Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cancellationToken);
+            var completed = await Task.WhenAny(delayTask, receiveTask);
+            if (completed == receiveTask)
+            {
+                break;
+            }
         }
 
         await receiveTask;

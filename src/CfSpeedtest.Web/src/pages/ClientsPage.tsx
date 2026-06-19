@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Edit3, Play, RefreshCw, Rocket, Trash2, UploadCloud } from "lucide-react";
+import { Copy, Edit3, FileText, Play, RefreshCw, Rocket, Trash2, UploadCloud } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDateTime, parseUtc, timeAgo } from "@/lib/format";
 import { ISP_KEYS, ispBadgeTone, ispKey, ispLabel } from "@/lib/isp";
@@ -12,6 +12,7 @@ export function ClientsPage() {
   const [loading, setLoading] = useState(false);
   const [edit, setEdit] = useState<ClientInfo | null>(null);
   const [deploy, setDeploy] = useState<ClientInfo | null>(null);
+  const [logClient, setLogClient] = useState<ClientInfo | null>(null);
 
   async function load(showLoading = false) {
     if (showLoading || items.length === 0) setLoading(true);
@@ -64,7 +65,7 @@ export function ClientsPage() {
                         <td className="w-44"><Progress value={pct} /><div className="mt-1 text-xs text-fg-subtle">{c.currentTaskTestedIps}/{c.currentTaskTotalIps}</div></td>
                         <td><div>{c.version || "-"}</div><div className="text-xs text-fg-subtle">{c.platform || "-"}</div></td>
                         <td><div>{timeAgo(c.lastSeenAt)}</div><div className="text-xs text-fg-subtle">{formatDateTime(c.lastSeenAt)}</div></td>
-                        <td><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" title="编辑" onClick={() => setEdit(c)}><Edit3 className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="测速" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-test`), "已触发测速")}><Play className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="更新" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-update`), "已触发更新检查")}><UploadCloud className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="部署命令" onClick={() => setDeploy(c)}><Rocket className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="删除" onClick={() => confirm("确定删除该客户端？") && doIt(() => api.del<string>(`/api/clients/${encodeURIComponent(c.clientId)}`), "客户端已删除")}><Trash2 className="h-4 w-4 text-danger" /></Button></div></td>
+                        <td><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" title="日志" onClick={() => setLogClient(c)}><FileText className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="编辑" onClick={() => setEdit(c)}><Edit3 className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="测速" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-test`), "已触发测速")}><Play className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="更新" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-update`), "已触发更新检查")}><UploadCloud className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="部署命令" onClick={() => setDeploy(c)}><Rocket className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="删除" onClick={() => confirm("确定删除该客户端？") && doIt(() => api.del<string>(`/api/clients/${encodeURIComponent(c.clientId)}`), "客户端已删除")}><Trash2 className="h-4 w-4 text-danger" /></Button></div></td>
                       </tr>
                     );
                   })}
@@ -76,6 +77,7 @@ export function ClientsPage() {
       </Card>
       <EditModal client={edit} onClose={() => setEdit(null)} onSaved={() => load(false)} />
       <DeployModal client={deploy} onClose={() => setDeploy(null)} onChanged={() => load(false)} />
+      <ClientLogModal client={logClient} onClose={() => setLogClient(null)} />
     </div>
   );
 }
@@ -92,6 +94,11 @@ function EditModal({ client, onClose, onSaved }: { client: ClientInfo | null; on
   useEffect(() => { if (client) { setName(client.name || ""); setIsp(ispKey(client.isp)); } }, [client]);
   async function save() { if (!client) return; await api.post<string>(`/api/clients/${encodeURIComponent(client.clientId)}/metadata`, { name, isp }); toast("客户端信息已更新", "success"); onClose(); await onSaved(); }
   return <Modal open={!!client} title="编辑客户端" onClose={onClose} footer={<><Button variant="secondary" onClick={onClose}>取消</Button><Button onClick={save}>保存</Button></>}><div className="grid gap-4"><Field label="客户端名称"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field><Field label="运营商"><Select value={isp} onChange={(e) => setIsp(e.target.value as IspKey)}>{ISP_KEYS.map((k) => <option key={k} value={k}>{ispLabel(k)}</option>)}</Select></Field></div></Modal>;
+}
+
+function ClientLogModal({ client, onClose }: { client: ClientInfo | null; onClose: () => void }) {
+  const log = client?.runtimeLog?.trim();
+  return <Modal open={!!client} title="客户端日志" onClose={onClose} maxWidth="max-w-4xl"><div className="space-y-3"><div className="grid gap-2 text-sm sm:grid-cols-2"><div><span className="text-fg-subtle">节点：</span>{client?.name || client?.clientId.slice(0, 8)}</div><div><span className="text-fg-subtle">运行：</span>{client?.runtimeStatus || "-"}</div><div><span className="text-fg-subtle">最后心跳：</span>{client?.lastSeenAt ? formatDateTime(client.lastSeenAt) : "-"}</div><div><span className="text-fg-subtle">版本：</span>{client?.version || "-"} / {client?.platform || "-"}</div></div>{log ? <Textarea readOnly value={log} className="min-h-[360px] font-mono text-xs" /> : <Empty title="暂无日志" desc="客户端下次心跳后会同步最近运行日志" />}</div></Modal>;
 }
 
 function DeployModal({ client, onClose, onChanged }: { client: ClientInfo | null; onClose: () => void; onChanged: () => Promise<void> }) {
