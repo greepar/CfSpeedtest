@@ -676,9 +676,13 @@ static Task StartHeartbeatLoopAsync(
                     intervalSeconds = nextIntervalSeconds;
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
+            }
+            catch (OperationCanceledException ex)
+            {
+                heartbeatError = ex;
             }
             catch (Exception ex)
             {
