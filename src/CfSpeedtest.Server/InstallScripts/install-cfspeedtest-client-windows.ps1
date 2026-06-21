@@ -91,8 +91,8 @@ function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath)
         Wait-ServiceDeleted -Name $Name
     }
 
+    Write-Log 'Killing any leftover CfSpeedtest.Client.exe processes...'
     Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -eq $ExePath } |
         ForEach-Object {
             Write-Log "Stopping leftover client process PID=$($_.ProcessId)..."
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
@@ -100,11 +100,20 @@ function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath)
 
     $deadline = (Get-Date).AddSeconds(30)
     do {
-        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -eq $ExePath })
+        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue)
         if ($leftovers.Count -eq 0) { return }
         Start-Sleep -Seconds 1
     } while ((Get-Date) -lt $deadline)
+}
+
+function Wait-ServiceRunning([string]$Name) {
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+        if ($null -ne $svc -and $svc.Status -eq 'Running') { return $true }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+    return $false
 }
 
 if (-not (Test-IsAdministrator)) {
@@ -155,7 +164,7 @@ if (-not (Test-Path $nssmExe)) {
     Copy-Item -Path $nssmSource -Destination $nssmExe -Force
 }
 
-$argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service"
+$argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service-worker"
 
 Write-Log 'Installing/updating Windows Service...'
 & $nssmExe install $serviceName $exePath $argList | Out-Null
@@ -166,7 +175,39 @@ Write-Log 'Installing/updating Windows Service...'
 & $nssmExe set $serviceName AppExit Default Restart | Out-Null
 & $nssmExe set $serviceName AppRestartDelay 5000 | Out-Null
 & $nssmExe set $serviceName ObjectName LocalSystem | Out-Null
-& $nssmExe start $serviceName | Out-Null
+
+Write-Log 'Starting service...'
+$started = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    if ($attempt -gt 1) { Start-Sleep -Seconds 3 }
+    try {
+        $output = & $nssmExe start $serviceName 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            $started = $true
+            break
+        }
+        Write-Log "NSSM start attempt $attempt failed: $($output.Trim())"
+    } catch {
+        Write-Log "NSSM start attempt $attempt exception: $($_.Exception.Message)"
+    }
+}
+
+if (-not $started) {
+    Write-Log 'NSSM start failed. Trying sc.exe start as fallback...'
+    try {
+        sc.exe start $serviceName | Out-Null
+        $started = $true
+    } catch {
+        Write-Log "sc.exe start also failed: $($_.Exception.Message)"
+    }
+}
+
+if ($started -and (Wait-ServiceRunning -Name $serviceName)) {
+    Write-Log 'Service started successfully.'
+}
+else {
+    Write-Log 'WARNING: Service may not be running. Check with: sc query CfSpeedtestClient'
+}
 
 Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $stageDir -Recurse -Force -ErrorAction SilentlyContinue
