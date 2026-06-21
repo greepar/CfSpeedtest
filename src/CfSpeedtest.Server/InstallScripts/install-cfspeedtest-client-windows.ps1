@@ -66,6 +66,47 @@ function Get-NssmUrl {
     return 'https://nssm.cc/release/nssm-2.24.zip'
 }
 
+function Wait-ServiceDeleted([string]$Name) {
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+        if ($null -eq $svc) { return }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+}
+
+function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath) {
+    $existingService = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if ($null -ne $existingService) {
+        Write-Log 'Existing Windows Service detected. Stopping and removing it before file replacement...'
+        if ((Test-Path $NssmPath)) {
+            & $NssmPath stop $Name | Out-Null
+            & $NssmPath remove $Name confirm | Out-Null
+        }
+        else {
+            sc.exe stop $Name | Out-Null
+            Start-Sleep -Seconds 2
+            sc.exe delete $Name | Out-Null
+        }
+        Wait-ServiceDeleted -Name $Name
+    }
+
+    Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -eq $ExePath } |
+        ForEach-Object {
+            Write-Log "Stopping leftover client process PID=$($_.ProcessId)..."
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -eq $ExePath })
+        if ($leftovers.Count -eq 0) { return }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+}
+
 if (-not (Test-IsAdministrator)) {
     Restart-Elevated
 }
@@ -92,16 +133,17 @@ Write-Log "Download URL: $downloadUrl"
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 New-Item -ItemType Directory -Path $nssmDir -Force | Out-Null
+$nssmExe = Join-Path $nssmDir 'nssm.exe'
 
 Write-Log 'Downloading client package...'
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 
 Write-Log 'Extracting client package...'
 Expand-Archive -Path $zipPath -DestinationPath $stageDir -Force
+Stop-ExistingClient -Name $serviceName -ExePath $exePath -NssmPath $nssmExe
 Copy-Item -Path (Join-Path $stageDir '*') -Destination $installDir -Recurse -Force
 
 Write-Log 'Preparing NSSM...'
-$nssmExe = Join-Path $nssmDir 'nssm.exe'
 if (-not (Test-Path $nssmExe)) {
     Invoke-WebRequest -Uri (Get-NssmUrl) -OutFile $nssmZipPath
     New-Item -ItemType Directory -Path $nssmStageDir -Force | Out-Null
@@ -116,13 +158,6 @@ if (-not (Test-Path $nssmExe)) {
 $argList = "--server `"$ServerUrl`" --client-id $ClientId --isp $Isp --name `"$ClientName`" --service"
 
 Write-Log 'Installing/updating Windows Service...'
-$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-if ($null -ne $existingService) {
-    Write-Log 'Existing Windows Service detected. Replacing it...'
-    & $nssmExe stop $serviceName | Out-Null
-    & $nssmExe remove $serviceName confirm | Out-Null
-}
-
 & $nssmExe install $serviceName $exePath $argList | Out-Null
 & $nssmExe set $serviceName AppDirectory $installDir | Out-Null
 & $nssmExe set $serviceName DisplayName 'CfSpeedtest Client' | Out-Null

@@ -94,7 +94,7 @@ if (!string.IsNullOrWhiteSpace(currentClientId))
 }
 
 const int StartupRetryDelaySeconds = 5;
-await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
+StartBackgroundUpdateCheck(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
 
 // NativeAOT-safe JSON options using source generators
 var jsonOpts = new JsonSerializerOptions
@@ -433,12 +433,7 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         downloadDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-update-download-{Guid.NewGuid():N}");
         Directory.CreateDirectory(downloadDir);
         var tempFile = Path.Combine(downloadDir, Path.GetFileName(new Uri(info.DownloadUrl).AbsolutePath));
-        Console.WriteLine("Downloading update package...");
-        using (var download = await httpClient.GetStreamAsync(info.DownloadUrl))
-        using (var file = File.Create(tempFile))
-        {
-            await download.CopyToAsync(file);
-        }
+        await DownloadUpdatePackageWithRetryAsync(httpClient, info.DownloadUrl, tempFile);
         Console.WriteLine($"Update package downloaded to: {tempFile}");
 
         var currentExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
@@ -495,6 +490,11 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
     }
 }
 
+static void StartBackgroundUpdateCheck(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
+{
+    _ = Task.Run(() => CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, httpClient));
+}
+
 static void RestartCurrentProcess(string currentExe, IReadOnlyList<string> args)
 {
     Process.Start(new ProcessStartInfo
@@ -506,6 +506,41 @@ static void RestartCurrentProcess(string currentExe, IReadOnlyList<string> args)
     });
 
     Environment.Exit(0);
+}
+
+static async Task DownloadUpdatePackageWithRetryAsync(HttpClient httpClient, string downloadUrl, string tempFile)
+{
+    const int MaxAttempts = 3;
+    var timeout = TimeSpan.FromMinutes(2);
+
+    for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+    {
+        try
+        {
+            TryDeleteFile(tempFile);
+            Console.WriteLine($"Downloading update package... attempt {attempt}/{MaxAttempts}");
+            using var cts = new CancellationTokenSource(timeout);
+            using var resp = await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            resp.EnsureSuccessStatusCode();
+            await using var download = await resp.Content.ReadAsStreamAsync(cts.Token);
+            await using var file = File.Create(tempFile);
+            await download.CopyToAsync(file, cts.Token);
+            return;
+        }
+        catch (OperationCanceledException) when (attempt < MaxAttempts)
+        {
+            Console.WriteLine($"Update package download timed out after {timeout.TotalSeconds:F0}s. Retrying...");
+        }
+        catch (Exception ex) when (attempt < MaxAttempts)
+        {
+            Console.WriteLine($"Update package download failed: {ex.Message}. Retrying...");
+        }
+
+        TryDeleteFile(tempFile);
+        await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, attempt * 5)));
+    }
+
+    throw new TimeoutException($"Update package download failed after {MaxAttempts} attempts.");
 }
 
 static string DetectClientPlatform()
