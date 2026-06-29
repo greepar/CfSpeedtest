@@ -201,6 +201,31 @@ public class DataStore
         }
     }
 
+    public bool RemoveFetchSource(string isp, FetchSource source)
+    {
+        lock (_lock)
+        {
+            if (!_config.IpSources.TryGetValue(isp, out var sourceConfig))
+            {
+                return false;
+            }
+
+            var value = source.Value.Trim();
+            var before = sourceConfig.FetchSources.Count;
+            sourceConfig.FetchSources = sourceConfig.FetchSources
+                .Where(x => x.Type != source.Type || !string.Equals(x.Value.Trim(), value, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var removed = sourceConfig.FetchSources.Count != before;
+            if (removed)
+            {
+                PersistFile("config.json", _config);
+            }
+
+            return removed;
+        }
+    }
+
     /// <summary>
     /// 从指定运营商的IP池中移除一批IP
     /// </summary>

@@ -64,6 +64,7 @@ export type IpPoolMap = Record<string, IpPoolView>;
 export interface IspRoundStatus {
   isp: string;
   taskId: string;
+  phase: string;
   scheduledAtUtc: string;
   finalizeAfterUtc: string;
   assignedClients: number;
@@ -155,6 +156,8 @@ export interface ServerConfig {
   batchSize: number;
   topN: number;
   maxTestIpCount: number;
+  crossTestEnabled: boolean;
+  crossTestCandidateCount: number;
   clientIntervalMinutes: number;
   historyRetentionDays: number;
   heartbeatIntervalSeconds: number;

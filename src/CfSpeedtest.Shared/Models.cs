@@ -56,6 +56,12 @@ public class SpeedTestTask
 
     /// <summary>服务端统一安排的本轮开始时间(UTC)</summary>
     public DateTime ScheduledAtUtc { get; set; } = DateTime.UtcNow;
+
+    /// <summary>是否为同运营商客户端交叉复测任务</summary>
+    public bool IsCrossTest { get; set; }
+
+    /// <summary>是否上报本次任务的全部测试结果，而不是仅上报 TopN</summary>
+    public bool ReportAllResults { get; set; }
 }
 
 /// <summary>
@@ -595,6 +601,12 @@ public class ServerConfig
     /// <summary>单轮测速最多测试多少个 IP（达到该数量后停止补拉）</summary>
     public int MaxTestIpCount { get; set; } = 40;
 
+    /// <summary>是否启用同运营商多客户端交叉复测</summary>
+    public bool CrossTestEnabled { get; set; }
+
+    /// <summary>交叉复测候选 IP 数量，0 表示使用 TopN * 2</summary>
+    public int CrossTestCandidateCount { get; set; } = 10;
+
     /// <summary>客户端轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;
 
@@ -769,6 +781,7 @@ public class IspRoundStatus
 {
     public string Isp { get; set; } = string.Empty;
     public string TaskId { get; set; } = string.Empty;
+    public string Phase { get; set; } = "initial";
     public DateTime ScheduledAtUtc { get; set; }
     public DateTime FinalizeAfterUtc { get; set; }
     public int AssignedClients { get; set; }

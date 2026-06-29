@@ -820,10 +820,14 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         return Results.Json(ApiResponse<SpeedTestTask>.Fail($"Round not started yet. Retry after {Math.Ceiling(wait.TotalSeconds)} seconds."));
     }
 
-    var ips = ipPool.GetBatch(client.Isp.ToString());
+    var ips = round.IsCrossTest
+        ? round.IpAddresses ?? []
+        : ipPool.GetBatch(client.Isp.ToString());
 
     if (ips.Count == 0)
-        return Results.Json(ApiResponse<SpeedTestTask>.Fail($"No IPs in pool for ISP {client.Isp}"));
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail(round.IsCrossTest
+            ? $"No cross-test IPs for ISP {client.Isp}"
+            : $"No IPs in pool for ISP {client.Isp}"));
 
     var task = new SpeedTestTask
     {
@@ -833,13 +837,15 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         TestPort = config.TestPort,
         DownloadDurationSeconds = config.DownloadDurationSeconds,
         TcpTestDurationSeconds = config.TcpTestDurationSeconds,
-        TopN = config.TopN,
-        MaxTestIpCount = config.MaxTestIpCount,
+        TopN = round.IsCrossTest ? Math.Max(config.TopN, ips.Count) : config.TopN,
+        MaxTestIpCount = round.IsCrossTest ? ips.Count : config.MaxTestIpCount,
         MinDownloadSpeedKBps = config.MinDownloadSpeedKBps,
         MaxDownloadSpeedKBps = config.MaxDownloadSpeedKBps,
         ClientIntervalMinutes = config.ClientIntervalMinutes,
         TaskId = round.TaskId,
         ScheduledAtUtc = round.ScheduledAtUtc,
+        IsCrossTest = round.IsCrossTest,
+        ReportAllResults = round.IsCrossTest,
     };
 
     if (round.IsImmediateDispatch)
@@ -1098,6 +1104,18 @@ app.MapPost("/api/ippool/remove", (IpPoolRemoveRequest req, DataStore store) =>
     return store.RemovePoolIp(req.Isp, req.Ip, req.Source)
         ? ApiResponse<string>.Ok("IP 已删除")
         : ApiResponse<string>.Fail("IP 不存在");
+});
+
+app.MapPost("/api/ippool/source/remove", (string isp, FetchSource source, DataStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(isp) || string.IsNullOrWhiteSpace(source.Value))
+    {
+        return ApiResponse<string>.Fail("Isp and source value are required");
+    }
+
+    return store.RemoveFetchSource(isp, source)
+        ? ApiResponse<string>.Ok("拉取源已删除")
+        : ApiResponse<string>.Fail("拉取源不存在");
 });
 
 // ============================================================

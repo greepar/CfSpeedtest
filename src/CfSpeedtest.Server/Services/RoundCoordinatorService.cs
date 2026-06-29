@@ -8,16 +8,36 @@ namespace CfSpeedtest.Server.Services;
 /// </summary>
 public class RoundCoordinatorService : BackgroundService
 {
+    private enum RoundPhase
+    {
+        Initial,
+        CrossTest,
+    }
+
+    public sealed record RoundTaskDispatch(
+        string TaskId,
+        DateTime ScheduledAtUtc,
+        bool IsImmediateDispatch,
+        bool IsCrossTest,
+        List<string>? IpAddresses = null);
+
     private sealed class RoundState
     {
         public string IspKey { get; init; } = string.Empty;
         public IspType Isp { get; init; }
         public string TaskId { get; init; } = string.Empty;
+        public string CrossTaskId => $"{TaskId}-cross";
         public DateTime StartAtUtc { get; init; }
-        public DateTime FinalizeAfterUtc { get; init; }
+        public DateTime? CrossStartAtUtc { get; set; }
+        public DateTime FinalizeAfterUtc { get; set; }
+        public RoundPhase Phase { get; set; } = RoundPhase.Initial;
         public HashSet<string> AssignedClients { get; } = [];
         public HashSet<string> ReportedClients { get; } = [];
         public HashSet<string> PendingTriggerClients { get; } = [];
+        public Dictionary<string, HashSet<string>> InitialResultIpsByClient { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<string> CrossTestIps { get; set; } = [];
+        public HashSet<string> CrossAssignedClients { get; } = [];
+        public HashSet<string> CrossReportedClients { get; } = [];
         public bool Finalizing { get; set; }
         public bool Finalized { get; set; }
     }
@@ -43,14 +63,32 @@ public class RoundCoordinatorService : BackgroundService
         _logger = logger;
     }
 
-    public (string TaskId, DateTime ScheduledAtUtc, bool IsImmediateDispatch) RegisterClient(IspType isp, string clientId)
+    public RoundTaskDispatch RegisterClient(IspType isp, string clientId)
     {
         var config = _store.GetConfig();
         var ispKey = isp.ToString();
 
         lock (_lock)
         {
-            var startAtUtc = _rounds.TryGetValue(ispKey, out var existingState) && !existingState.Finalized && DateTime.UtcNow <= existingState.FinalizeAfterUtc
+            if (_rounds.TryGetValue(ispKey, out var crossState)
+                && !crossState.Finalized
+                && crossState.Phase == RoundPhase.CrossTest
+                && DateTime.UtcNow <= crossState.FinalizeAfterUtc)
+            {
+                crossState.CrossAssignedClients.Add(clientId);
+                var crossImmediateDispatch = crossState.PendingTriggerClients.Contains(clientId);
+                return new RoundTaskDispatch(
+                    crossState.CrossTaskId,
+                    crossState.CrossStartAtUtc ?? DateTime.UtcNow,
+                    crossImmediateDispatch,
+                    IsCrossTest: true,
+                    GetCrossTestIpsForClient(crossState, clientId));
+            }
+
+            var startAtUtc = _rounds.TryGetValue(ispKey, out var existingState)
+                && !existingState.Finalized
+                && existingState.Phase == RoundPhase.Initial
+                && DateTime.UtcNow <= existingState.FinalizeAfterUtc
                 ? existingState.StartAtUtc
                 : GetNextRoundStartUtc(DateTime.UtcNow, config.ClientIntervalMinutes);
 
@@ -74,7 +112,7 @@ public class RoundCoordinatorService : BackgroundService
 
             state.AssignedClients.Add(clientId);
             var isImmediateDispatch = state.PendingTriggerClients.Contains(clientId);
-            return (state.TaskId, state.StartAtUtc, isImmediateDispatch);
+            return new RoundTaskDispatch(state.TaskId, state.StartAtUtc, isImmediateDispatch, IsCrossTest: false);
         }
     }
 
@@ -172,7 +210,7 @@ public class RoundCoordinatorService : BackgroundService
             var state = EnsureActiveRoundStateLocked(isp, clientId, allowCreateForScheduledRound: true);
             if (state is not null
                 && !state.Finalized
-                && state.PendingTriggerClients.Remove(clientId))
+                && state.PendingTriggerClients.Contains(clientId))
             {
                 return true;
             }
@@ -199,36 +237,59 @@ public class RoundCoordinatorService : BackgroundService
 
     public async Task<string> HandleReportAsync(SpeedTestReport report)
     {
-        RoundState? finalizeState = null;
+        RoundState? completionState = null;
         int assigned = 0;
         int reported = 0;
+        var phaseName = "round";
 
         lock (_lock)
         {
             if (_rounds.TryGetValue(report.Isp.ToString(), out var state)
+                && state.Phase == RoundPhase.Initial
                 && state.TaskId == report.TaskId)
             {
                 state.ReportedClients.Add(report.ClientId);
-                assigned = state.AssignedClients.Count;
+                state.InitialResultIpsByClient[report.ClientId] = report.Results
+                    .Select(r => r.IpAddress)
+                    .Where(ip => !string.IsNullOrWhiteSpace(ip))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                assigned = CountInitialTargetClients(state);
                 reported = state.ReportedClients.Count;
+                phaseName = "initial round";
 
                 if (!state.Finalized && !state.Finalizing && assigned > 0 && reported >= assigned)
                 {
                     state.Finalizing = true;
-                    finalizeState = state;
+                    completionState = state;
+                }
+            }
+            else if (_rounds.TryGetValue(report.Isp.ToString(), out state)
+                && state.Phase == RoundPhase.CrossTest
+                && state.CrossTaskId == report.TaskId)
+            {
+                state.CrossAssignedClients.Add(report.ClientId);
+                state.CrossReportedClients.Add(report.ClientId);
+                assigned = CountCrossTargetClients(state);
+                reported = state.CrossReportedClients.Count;
+                phaseName = "cross-test round";
+
+                if (!state.Finalized && !state.Finalizing && assigned > 0 && reported >= assigned)
+                {
+                    state.Finalizing = true;
+                    completionState = state;
                 }
             }
         }
 
-        if (finalizeState is not null)
+        if (completionState is not null)
         {
-            var summary = await FinalizeRoundAsync(finalizeState);
+            var summary = await CompleteRoundAsync(completionState);
             return $"Report received, {summary}";
         }
 
         if (assigned > 0)
         {
-            return $"Report received, waiting for this round to finish ({reported}/{assigned} clients reported)";
+            return $"Report received, waiting for this {phaseName} to finish ({reported}/{assigned} clients reported)";
         }
 
         return "Report received";
@@ -248,22 +309,26 @@ public class RoundCoordinatorService : BackgroundService
             {
                 if (_rounds.TryGetValue(ispKey, out var state))
                 {
-                    var totalTargetClients = state.AssignedClients.Count + state.PendingTriggerClients.Count;
+                    var isCrossTest = state.Phase == RoundPhase.CrossTest;
+                    var scheduledAtUtc = isCrossTest ? state.CrossStartAtUtc ?? state.StartAtUtc : state.StartAtUtc;
+                    var totalTargetClients = isCrossTest ? CountCrossTargetClients(state) : CountInitialTargetClients(state);
+                    var reportedClients = isCrossTest ? state.CrossReportedClients.Count : state.ReportedClients.Count;
                     if (!state.Finalized && nowUtc <= state.FinalizeAfterUtc)
                     {
                         currentRoundStartUtc = currentRoundStartUtc.HasValue
-                            ? Min(currentRoundStartUtc.Value, state.StartAtUtc)
-                            : state.StartAtUtc;
+                            ? Min(currentRoundStartUtc.Value, scheduledAtUtc)
+                            : scheduledAtUtc;
                     }
 
                     statuses.Add(new IspRoundStatus
                     {
                         Isp = ispKey,
-                        TaskId = state.TaskId,
-                        ScheduledAtUtc = state.StartAtUtc,
+                        TaskId = isCrossTest ? state.CrossTaskId : state.TaskId,
+                        Phase = isCrossTest ? "cross" : "initial",
+                        ScheduledAtUtc = scheduledAtUtc,
                         FinalizeAfterUtc = state.FinalizeAfterUtc,
                         AssignedClients = totalTargetClients,
-                        ReportedClients = state.ReportedClients.Count,
+                        ReportedClients = reportedClients,
                         Finalizing = state.Finalizing,
                         Finalized = state.Finalized,
                     });
@@ -321,7 +386,7 @@ public class RoundCoordinatorService : BackgroundService
             {
                 try
                 {
-                    await FinalizeRoundAsync(state);
+                    await CompleteRoundAsync(state);
                 }
                 catch (Exception ex)
                 {
@@ -335,14 +400,35 @@ public class RoundCoordinatorService : BackgroundService
         }
     }
 
+    private async Task<string> CompleteRoundAsync(RoundState state)
+    {
+        if (state.Phase == RoundPhase.Initial)
+        {
+            var crossTestSummary = TryStartCrossTest(state);
+            if (crossTestSummary is not null)
+            {
+                return crossTestSummary;
+            }
+        }
+
+        return await FinalizeRoundAsync(state);
+    }
+
     private async Task<string> FinalizeRoundAsync(RoundState state)
     {
         var config = _store.GetConfig();
-        var roundReports = _store.GetHistory(500)
-            .Where(h => h.Isp == state.Isp && h.TaskId == state.TaskId)
-            .ToList();
+        var initialReports = GetRoundReports(state.Isp, state.TaskId);
+        var crossReports = state.Phase == RoundPhase.CrossTest
+            ? GetRoundReports(state.Isp, state.CrossTaskId)
+            : [];
+        var useCrossReports = crossReports.Count > 0;
+        var sourceReports = useCrossReports
+            ? initialReports.Concat(crossReports).ToList()
+            : initialReports;
 
-        if (state.AssignedClients.Count == 0 && state.PendingTriggerClients.Count == 0 && roundReports.Count == 0)
+        if (CountInitialTargetClients(state) == 0
+            && CountCrossTargetClients(state) == 0
+            && sourceReports.Count == 0)
         {
             lock (_lock)
             {
@@ -358,26 +444,30 @@ public class RoundCoordinatorService : BackgroundService
             return "empty round skipped";
         }
 
-        var allRoundResults = roundReports
-            .SelectMany(h => h.Results)
-            .OrderByDescending(r => r.Score)
-            .GroupBy(r => r.IpAddress)
-            .Select(g => g.First())
-            .ToList();
+        var candidateSet = state.CrossTestIps.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allRoundResults = useCrossReports
+            ? BuildAggregatedResults(sourceReports
+                .SelectMany(h => h.Results)
+                .Where(r => candidateSet.Count == 0 || candidateSet.Contains(r.IpAddress)))
+            : sourceReports
+                .SelectMany(h => h.Results)
+                .OrderByDescending(r => r.Score)
+                .GroupBy(r => r.IpAddress, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
 
-        var qualifiedResults = allRoundResults
+        var topResults = allRoundResults
             .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+            .OrderByDescending(r => r.Score)
             .Take(config.TopN)
             .ToList();
-
-        var topResults = qualifiedResults;
 
         int removed = 0;
         if (config.AutoCleanupEnabled && topResults.Count > 0)
         {
-            var keepIps = topResults.Select(r => r.IpAddress).ToHashSet();
+            var keepIps = topResults.Select(r => r.IpAddress).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var poolIps = _store.GetConfig().IpSources.TryGetValue(state.IspKey, out var source)
-                ? source.ManualIps.Concat(_store.GetApiIpPool(state.IspKey)).Distinct().ToList()
+                ? source.ManualIps.Concat(_store.GetApiIpPool(state.IspKey)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
                 : _store.GetApiIpPool(state.IspKey);
             var removeIps = poolIps.Where(ip => !keepIps.Contains(ip)).ToList();
             if (removeIps.Count > 0)
@@ -397,15 +487,195 @@ public class RoundCoordinatorService : BackgroundService
         }
 
         _logger.LogInformation(
-            "Round finalized for {Isp}: task={TaskId}, assigned={Assigned}, reported={Reported}, top={TopCount}, removed={Removed}",
+            "Round finalized for {Isp}: task={TaskId}, phase={Phase}, assigned={Assigned}, reported={Reported}, crossReports={CrossReports}, top={TopCount}, removed={Removed}",
             state.IspKey,
-            state.TaskId,
-            state.AssignedClients.Count,
-            state.ReportedClients.Count,
+            useCrossReports ? state.CrossTaskId : state.TaskId,
+            state.Phase,
+            state.Phase == RoundPhase.CrossTest ? CountCrossTargetClients(state) : CountInitialTargetClients(state),
+            state.Phase == RoundPhase.CrossTest ? state.CrossReportedClients.Count : state.ReportedClients.Count,
+            crossReports.Count,
             topResults.Count,
             removed);
 
-        return $"round finalized: kept top {topResults.Count}, removed {removed} IPs, source refresh triggered";
+        return useCrossReports
+            ? $"cross-test round finalized: kept top {topResults.Count}, removed {removed} IPs, source refresh triggered"
+            : $"round finalized: kept top {topResults.Count}, removed {removed} IPs, source refresh triggered";
+    }
+
+    private string? TryStartCrossTest(RoundState state)
+    {
+        var config = _store.GetConfig();
+        if (!config.CrossTestEnabled)
+        {
+            return null;
+        }
+
+        var initialReports = GetRoundReports(state.Isp, state.TaskId);
+        var targetClientIds = initialReports
+            .Select(h => h.ClientId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (targetClientIds.Count < 2)
+        {
+            return null;
+        }
+
+        var candidateIps = BuildCrossTestIps(initialReports, config);
+        if (candidateIps.Count == 0)
+        {
+            return null;
+        }
+
+        var ownIpsByClient = initialReports
+            .GroupBy(h => h.ClientId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.SelectMany(h => h.Results)
+                    .Select(r => r.IpAddress)
+                    .Where(ip => !string.IsNullOrWhiteSpace(ip))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+        var crossStartAtUtc = DateTime.UtcNow;
+
+        lock (_lock)
+        {
+            if (state.Finalized || state.Phase != RoundPhase.Initial)
+            {
+                return null;
+            }
+
+            state.Phase = RoundPhase.CrossTest;
+            state.CrossStartAtUtc = crossStartAtUtc;
+            state.CrossTestIps = candidateIps;
+            state.CrossAssignedClients.Clear();
+            state.CrossReportedClients.Clear();
+            state.PendingTriggerClients.Clear();
+            state.InitialResultIpsByClient.Clear();
+
+            foreach (var clientId in targetClientIds)
+            {
+                state.CrossAssignedClients.Add(clientId);
+                state.PendingTriggerClients.Add(clientId);
+            }
+
+            foreach (var (clientId, ips) in ownIpsByClient)
+            {
+                state.InitialResultIpsByClient[clientId] = ips;
+            }
+
+            state.FinalizeAfterUtc = crossStartAtUtc.Add(GetCrossFinalizeGracePeriod(config, candidateIps.Count));
+            state.Finalizing = false;
+        }
+
+        _logger.LogInformation(
+            "Cross-test started for {Isp}: task={TaskId}, crossTask={CrossTaskId}, clients={ClientCount}, candidates={CandidateCount}",
+            state.IspKey,
+            state.TaskId,
+            state.CrossTaskId,
+            targetClientIds.Count,
+            candidateIps.Count);
+
+        return $"cross-test started: {candidateIps.Count} candidate IPs assigned to {targetClientIds.Count} clients";
+    }
+
+    private List<TestHistory> GetRoundReports(IspType isp, string taskId)
+    {
+        return _store.GetHistory(500)
+            .Where(h => h.Isp == isp && h.TaskId == taskId)
+            .ToList();
+    }
+
+    private static List<string> BuildCrossTestIps(List<TestHistory> initialReports, ServerConfig config)
+    {
+        var allResults = initialReports
+            .SelectMany(h => h.Results)
+            .Where(r => !string.IsNullOrWhiteSpace(r.IpAddress))
+            .ToList();
+        var qualifiedResults = allResults
+            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+            .ToList();
+        var sourceResults = qualifiedResults.Count > 0 ? qualifiedResults : allResults;
+
+        return sourceResults
+            .OrderByDescending(r => r.Score)
+            .GroupBy(r => r.IpAddress, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First().IpAddress)
+            .Take(GetCrossTestCandidateCount(config))
+            .ToList();
+    }
+
+    private static List<IpTestResult> BuildAggregatedResults(IEnumerable<IpTestResult> results)
+    {
+        return results
+            .Where(r => !string.IsNullOrWhiteSpace(r.IpAddress))
+            .GroupBy(r => r.IpAddress, StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var items = g.ToList();
+                return new IpTestResult
+                {
+                    IpAddress = g.Key,
+                    DownloadSpeedKBps = items.Average(r => r.DownloadSpeedKBps),
+                    AvgLatencyMs = items.Average(r => r.AvgLatencyMs),
+                    MinLatencyMs = items.Min(r => r.MinLatencyMs),
+                    PacketLossRate = items.Average(r => r.PacketLossRate),
+                    TcpSuccessCount = items.Sum(r => r.TcpSuccessCount),
+                    TcpTotalCount = items.Sum(r => r.TcpTotalCount),
+                    Score = items.Average(r => r.Score),
+                };
+            })
+            .OrderByDescending(r => r.Score)
+            .ToList();
+    }
+
+    private static int CountInitialTargetClients(RoundState state)
+    {
+        return state.AssignedClients
+            .Concat(state.PendingTriggerClients)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+    }
+
+    private static int CountCrossTargetClients(RoundState state)
+    {
+        return state.CrossAssignedClients.Count;
+    }
+
+    private static List<string> GetCrossTestIpsForClient(RoundState state, string clientId)
+    {
+        if (state.CrossTestIps.Count == 0)
+        {
+            return [];
+        }
+
+        if (state.InitialResultIpsByClient.TryGetValue(clientId, out var ownIps))
+        {
+            var crossIps = state.CrossTestIps
+                .Where(ip => !ownIps.Contains(ip))
+                .ToList();
+            if (crossIps.Count > 0)
+            {
+                return crossIps;
+            }
+        }
+
+        return [.. state.CrossTestIps];
+    }
+
+    private static int GetCrossTestCandidateCount(ServerConfig config)
+    {
+        var topN = Math.Max(1, config.TopN);
+        return config.CrossTestCandidateCount > 0
+            ? Math.Max(topN, config.CrossTestCandidateCount)
+            : topN * 2;
+    }
+
+    private static TimeSpan GetCrossFinalizeGracePeriod(ServerConfig config, int candidateCount)
+    {
+        var perIpSeconds = Math.Max(1, config.TcpTestDurationSeconds) + Math.Max(1, config.DownloadDurationSeconds);
+        var estimatedSeconds = Math.Max(1, candidateCount) * perIpSeconds;
+        return TimeSpan.FromSeconds(estimatedSeconds + Math.Max(60, config.HeartbeatIntervalSeconds * 2));
     }
 
     private static DateTime GetNextRoundStartUtc(DateTime nowUtc, int intervalMinutes)
@@ -456,6 +726,11 @@ public class RoundCoordinatorService : BackgroundService
                 FinalizeAfterUtc = currentStartUtc.Add(GetFinalizeGracePeriod(config)),
             };
             _rounds[ispKey] = state;
+        }
+
+        if (state.Phase == RoundPhase.CrossTest)
+        {
+            return state;
         }
 
         if (!state.Finalized

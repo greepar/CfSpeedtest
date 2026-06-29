@@ -225,8 +225,9 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         throw new InvalidOperationException(message);
     }
 
-    Console.WriteLine($"Got task {task.TaskId[..8]}: {task.IpAddresses.Count} IPs to test");
-    runtimeState.AppendLog($"Got task {task.TaskId}: {task.IpAddresses.Count} IPs");
+    var taskKind = task.IsCrossTest ? "cross-test" : "initial";
+    Console.WriteLine($"Got {taskKind} task {task.TaskId[..Math.Min(8, task.TaskId.Length)]}: {task.IpAddresses.Count} IPs to test");
+    runtimeState.AppendLog($"Got {taskKind} task {task.TaskId}: {task.IpAddresses.Count} IPs");
     Console.WriteLine($"Test URL template: {task.TestUrl}");
     Console.WriteLine($"Host: {task.TestHost}, Port: {task.TestPort}");
     Console.WriteLine($"Server interval: {task.ClientIntervalMinutes}min");
@@ -316,28 +317,39 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         }
     }
 
-    // 3. 优先保留达标结果；如果一个都不达标，至少回传 1 个最优结果，避免完全空结果
+    // 3. 普通任务只上报 TopN；交叉复测上报全部候选结果，便于服务端按多客户端表现聚合。
+    List<IpTestResult> reportResults;
     var qualifiedResults = allResults
         .Where(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps)
         .OrderByDescending(r => r.Score)
-        .Take(task.TopN)
         .ToList();
 
-    var topResults = qualifiedResults.Count > 0
-        ? qualifiedResults
-        : allResults
+    if (task.ReportAllResults)
+    {
+        reportResults = allResults
             .OrderByDescending(r => r.Score)
-            .Take(task.TopN)
             .ToList();
+    }
+    else
+    {
+        reportResults = qualifiedResults.Count > 0
+            ? qualifiedResults.Take(task.TopN).ToList()
+            : allResults
+                .OrderByDescending(r => r.Score)
+                .Take(task.TopN)
+                .ToList();
+    }
 
     Console.WriteLine();
-    if (qualifiedResults.Count > 0)
-        Console.WriteLine($"=== Qualified Top {topResults.Count} Results ===");
+    if (task.ReportAllResults)
+        Console.WriteLine($"=== Cross-Test Results {reportResults.Count} ===");
+    else if (qualifiedResults.Count > 0)
+        Console.WriteLine($"=== Qualified Top {reportResults.Count} Results ===");
     else
-        Console.WriteLine($"=== No results met min speed {task.MinDownloadSpeedKBps:F1} KB/s, fallback to top {topResults.Count} by score ===");
-    for (int i = 0; i < topResults.Count; i++)
+        Console.WriteLine($"=== No results met min speed {task.MinDownloadSpeedKBps:F1} KB/s, fallback to top {reportResults.Count} by score ===");
+    for (int i = 0; i < reportResults.Count; i++)
     {
-        var r = topResults[i];
+        var r = reportResults[i];
         Console.WriteLine($"  #{i + 1} {r.IpAddress,-16} Speed:{r.DownloadSpeedKBps,8:F1} KB/s  " +
             $"Latency:{r.AvgLatencyMs,6:F1}ms  Loss:{r.PacketLossRate:P1}  Score:{r.Score:F1}");
     }
@@ -345,19 +357,19 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     // 4. 上报结果
     Console.WriteLine();
     Console.Write("Reporting results... ");
-    runtimeState.AppendLog($"Reporting {topResults.Count} result(s)");
+    runtimeState.AppendLog($"Reporting {reportResults.Count} result(s)");
     var report = new SpeedTestReport
     {
         TaskId = task.TaskId,
         ClientId = clientId,
         Isp = runtimeProfile.Isp,
-        Results = topResults,
+        Results = reportResults,
         CompletedAt = DateTime.UtcNow,
     };
     var reportJson = JsonSerializer.Serialize(report, AppJsonContext.Default.SpeedTestReport);
     await PostReportWithRetryAsync(serverUrl, reportJson, transportState, runtimeState);
     Console.WriteLine("OK");
-    runtimeState.SetCompleted(task.IpAddresses.Count, topResults.Count);
+    runtimeState.SetCompleted(task.IpAddresses.Count, reportResults.Count);
     runtimeState.AppendLog("Report completed successfully");
 }
 
