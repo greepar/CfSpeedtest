@@ -1255,7 +1255,7 @@ static void TryUpdateServiceArguments(string serverUrl, string clientId, IspType
             var exePath = Path.Combine(installDir, "CfSpeedtest.Client.exe");
             if (File.Exists(nssmExe) && File.Exists(exePath))
             {
-                var args = $"--server \"{serverUrl}\" --client-id {clientId} --isp {isp} --name \"{clientName}\" --service";
+                var args = $"--server \"{serverUrl}\" --client-id {clientId} --isp {isp} --name \"{clientName}\" --service-worker";
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = nssmExe,
@@ -1437,6 +1437,22 @@ static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
                 New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
             }
             Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+        }
+
+        $nssmExe = Join-Path $TargetDir 'nssm\nssm.exe'
+        if (Test-Path -LiteralPath $nssmExe) {
+            $params = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($params)) {
+                if ($params -notmatch '(^|\s)--service-worker(\s|$)') {
+                    if ($params -match '(^|\s)--service(\s|$)') {
+                        $params = [regex]::Replace($params, '(^|\s)--service(\s|$)', '$1--service-worker$2', 1)
+                    }
+                    else {
+                        $params = "$params --service-worker"
+                    }
+                    & $nssmExe set $ServiceName AppParameters $params | Out-Null
+                }
+            }
         }
 
         Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
