@@ -30,7 +30,7 @@ public class DataStore
     public DataStore(ILogger<DataStore> logger, IConfiguration configuration)
     {
         _logger = logger;
-        _dataDir = configuration.GetValue<string>("DataDir") ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _dataDir = configuration["DataDir"] ?? Path.Combine(AppContext.BaseDirectory, "data");
         Directory.CreateDirectory(_dataDir);
         Load();
     }
