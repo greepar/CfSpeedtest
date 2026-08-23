@@ -33,6 +33,11 @@ public class DataStore
         _dataDir = configuration["DataDir"] ?? Path.Combine(AppContext.BaseDirectory, "data");
         Directory.CreateDirectory(_dataDir);
         Load();
+        var removedHistoryCount = ApplyHistoryRetention();
+        if (removedHistoryCount > 0)
+        {
+            _logger.LogInformation("Removed {Count} expired or excess history records during startup", removedHistoryCount);
+        }
     }
 
     // ===== Config =====
