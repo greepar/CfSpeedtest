@@ -10,6 +10,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
+    <SelfContained Condition="'$(PublishAot)' == 'true'">true</SelfContained>
+    <IsAotCompatible>true</IsAotCompatible>
     <Version>1.8.9</Version>
     <AssemblyVersion>1.8.9.0</AssemblyVersion>
     <FileVersion>1.8.9.0</FileVersion>

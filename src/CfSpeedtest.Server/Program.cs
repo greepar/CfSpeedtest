@@ -803,9 +803,9 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
 {
     var client = store.GetClient(clientId);
     if (client is null)
-        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client not registered"));
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client not registered"), AppJsonContext.Default.ApiResponseSpeedTestTask);
     if (!client.Allowed)
-        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client is not allowed to connect"));
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client is not allowed to connect"), AppJsonContext.Default.ApiResponseSpeedTestTask);
 
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
@@ -817,7 +817,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
     var wait = round.ScheduledAtUtc - DateTime.UtcNow;
     if (!round.IsImmediateDispatch && wait > TimeSpan.Zero)
     {
-        return Results.Json(ApiResponse<SpeedTestTask>.Fail($"Round not started yet. Retry after {Math.Ceiling(wait.TotalSeconds)} seconds."));
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail($"Round not started yet. Retry after {Math.Ceiling(wait.TotalSeconds)} seconds."), AppJsonContext.Default.ApiResponseSpeedTestTask);
     }
 
     var ips = round.IsCrossTest
@@ -827,7 +827,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
     if (ips.Count == 0)
         return Results.Json(ApiResponse<SpeedTestTask>.Fail(round.IsCrossTest
             ? $"No cross-test IPs for ISP {client.Isp}"
-            : $"No IPs in pool for ISP {client.Isp}"));
+            : $"No IPs in pool for ISP {client.Isp}"), AppJsonContext.Default.ApiResponseSpeedTestTask);
 
     var task = new SpeedTestTask
     {
@@ -853,7 +853,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         rounds.MarkTriggerTaskDispatched(clientId, client.Isp);
     }
 
-    return Results.Json(ApiResponse<SpeedTestTask>.Ok(task));
+    return Results.Json(ApiResponse<SpeedTestTask>.Ok(task), AppJsonContext.Default.ApiResponseSpeedTestTask);
 });
 
 // ============================================================

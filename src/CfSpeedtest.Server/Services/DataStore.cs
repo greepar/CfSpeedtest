@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using CfSpeedtest.Shared;
 
 namespace CfSpeedtest.Server.Services;
@@ -12,6 +13,7 @@ public class DataStore
     private readonly string _dataDir;
     private readonly ILogger<DataStore> _logger;
     private readonly Lock _lock = new();
+    private static readonly AppJsonContext PersistenceJsonContext = new(new JsonSerializerOptions { WriteIndented = true });
 
     private ServerConfig _config = new();
     private readonly ConcurrentDictionary<string, ClientInfo> _clients = new();
@@ -501,7 +503,7 @@ public class DataStore
         try
         {
             var path = Path.Combine(_dataDir, filename);
-            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(data, PersistenceJsonContext.GetTypeInfo(typeof(T))!);
             File.WriteAllText(path, json);
         }
         catch (Exception ex)
@@ -563,10 +565,10 @@ public class DataStore
         try
         {
             var json = File.ReadAllText(path);
-            var result = JsonSerializer.Deserialize<T>(json);
+            var result = JsonSerializer.Deserialize(json, PersistenceJsonContext.GetTypeInfo(typeof(T))!);
             if (result is not null)
             {
-                target = result;
+                target = (T)result;
                 return true;
             }
         }

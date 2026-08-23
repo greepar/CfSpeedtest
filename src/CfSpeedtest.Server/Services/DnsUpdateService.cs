@@ -414,15 +414,15 @@ public class DnsUpdateService
             var client = _httpFactory.CreateClient();
             var url = $"{hwConfig.Endpoint.TrimEnd('/')}/v2.1/zones/{recordConfig.ZoneId}/recordsets/{recordConfig.RecordSetId}";
 
-            var requestBody = new
+            var requestBody = new HuaweiDnsRecordSetRequest
             {
-                name = recordConfig.Domain.EndsWith('.') ? recordConfig.Domain : recordConfig.Domain + ".",
-                type = "A",
-                ttl = recordConfig.Ttl > 0 ? recordConfig.Ttl : 60,
-                records = ips,
+                Name = recordConfig.Domain.EndsWith('.') ? recordConfig.Domain : recordConfig.Domain + ".",
+                Type = "A",
+                Ttl = recordConfig.Ttl > 0 ? recordConfig.Ttl : 60,
+                Records = ips,
             };
 
-            var json = JsonSerializer.Serialize(requestBody);
+            var json = JsonSerializer.Serialize(requestBody, ServerJsonContext.Default.HuaweiDnsRecordSetRequest);
             using var request = CreateSignedRequest(HttpMethod.Put, url, json, hwConfig);
 
             _logger.LogInformation("Updating Huawei DNS for {Isp}: {Url} with IPs: {Ips}",
@@ -608,4 +608,12 @@ public class DnsUpdateService
     {
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
+}
+
+internal sealed class HuaweiDnsRecordSetRequest
+{
+    public required string Name { get; init; }
+    public required string Type { get; init; }
+    public required int Ttl { get; init; }
+    public required List<string> Records { get; init; }
 }
