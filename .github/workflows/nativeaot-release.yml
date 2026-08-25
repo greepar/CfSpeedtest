@@ -1,4 +1,4 @@
-name: CfSpeedtest Client NativeAOT Release
+name: CfSpeedtest NativeAOT Release
 
 on:
   push:
@@ -17,8 +17,8 @@ env:
   WEB_PATH: "src/CfSpeedtest.Web"
 
 jobs:
-  build-web-and-server:
-    name: Build WebUI and Server
+  build-web:
+    name: Build WebUI
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -37,16 +37,15 @@ jobs:
           npm run build
         working-directory: ${{ env.WEB_PATH }}
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Upload WebUI artifact
+        uses: actions/upload-artifact@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Build Server
-        run: dotnet build ${{ env.SERVER_PROJECT_PATH }} -c Release
+          name: cfspeedtest-webui
+          path: src/CfSpeedtest.Server/wwwroot
+          if-no-files-found: error
 
   build-and-package:
-    name: Build (${{ matrix.rid }})
+    name: Build Client (${{ matrix.rid }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -153,6 +152,113 @@ jobs:
           name: ${{ matrix.archive_name }}
           path: ${{ matrix.archive_name }}.${{ matrix.archive_ext }}
 
+  build-server:
+    name: Build Server (${{ matrix.rid }})
+    needs: build-web
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            rid: win-x64
+            archive_name: cfspeedtest-server-win-x64
+          - runner: windows-latest
+            rid: win-arm64
+            archive_name: cfspeedtest-server-win-arm64
+          - runner: ubuntu-latest
+            rid: linux-x64
+            archive_name: cfspeedtest-server-linux-x64
+          - runner: ubuntu-latest
+            rid: linux-arm64
+            archive_name: cfspeedtest-server-linux-arm64
+          - runner: macos-14
+            rid: osx-x64
+            archive_name: cfspeedtest-server-osx-x64
+          - runner: macos-14
+            rid: osx-arm64
+            archive_name: cfspeedtest-server-osx-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download WebUI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cfspeedtest-webui
+          path: src/CfSpeedtest.Server/wwwroot
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install Linux ARM64 cross-compilation tools
+        if: runner.os == 'Linux' && matrix.rid == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld gcc-aarch64-linux-gnu zlib1g-dev
+
+      - name: Publish Server NativeAOT
+        run: >
+          dotnet publish ${{ env.SERVER_PROJECT_PATH }}
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -o publish/server-${{ matrix.rid }}
+          -p:SkipBuildWebUi=true
+          -p:StripSymbols=true
+          ${{ runner.os == 'Linux' && '-p:LinkerFlavor=lld' || '' }}
+        env:
+          COMPlus_CrossCompiling: ${{ matrix.rid == 'linux-arm64' && '1' || '0' }}
+
+      - name: Verify embedded WebUI
+        run: |
+          $binary = [System.IO.File]::ReadAllBytes("./publish/server-${{ matrix.rid }}/CfSpeedtest.Server.exe")
+          $binaryText = [System.Text.Encoding]::UTF8.GetString($binary)
+          if (-not $binaryText.Contains("wwwroot/index.html")) {
+            throw "Embedded WebUI was not found in the Server executable"
+          }
+        if: runner.os == 'Windows'
+        shell: pwsh
+
+      - name: Verify embedded WebUI
+        run: strings ./publish/server-${{ matrix.rid }}/CfSpeedtest.Server | grep -F "wwwroot/index.html"
+        if: runner.os != 'Windows'
+        shell: bash
+
+      - name: Remove debug symbols (Windows)
+        if: runner.os == 'Windows'
+        run: Get-ChildItem -Path ./publish/server-${{ matrix.rid }} -Recurse -Include *.pdb | Remove-Item -Force
+        shell: pwsh
+
+      - name: Remove debug symbols (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          find ./publish/server-${{ matrix.rid }} -type f -name "*.pdb" -delete || true
+          find ./publish/server-${{ matrix.rid }} -type f -name "*.dbg" -delete || true
+          find ./publish/server-${{ matrix.rid }} -type d -name "*.dSYM" -exec rm -rf {} + || true
+        shell: bash
+
+      - name: Create Server archive (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path ./publish/server-${{ matrix.rid }}/* -DestinationPath ./${{ matrix.archive_name }}.zip
+        shell: pwsh
+
+      - name: Create Server archive (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd publish/server-${{ matrix.rid }}
+          zip -r ../../${{ matrix.archive_name }}.zip .
+        shell: bash
+
+      - name: Upload Server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive_name }}
+          path: ${{ matrix.archive_name }}.zip
+
   build-musl-x64:
     name: Build (linux-musl-x64)
     runs-on: ubuntu-latest
@@ -197,9 +303,11 @@ jobs:
 
   create-release:
     name: Create GitHub Release
+    if: github.ref_type == 'tag'
     needs:
-      - build-web-and-server
+      - build-web
       - build-and-package
+      - build-server
       - build-musl-x64
       - build-musl-arm64
     runs-on: ubuntu-latest
