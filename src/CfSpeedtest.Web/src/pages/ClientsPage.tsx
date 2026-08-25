@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Copy, Edit3, FileText, Play, RefreshCw, Rocket, Trash2, UploadCloud } from "lucide-react";
 import { api } from "@/lib/api";
-import { formatDateTime, parseUtc, timeAgo } from "@/lib/format";
+import { formatDateTime, timeAgo } from "@/lib/format";
 import { ISP_KEYS, ispBadgeTone, ispKey, ispLabel } from "@/lib/isp";
 import type { BootstrapTokenCreateResponse, BootstrapTokenStatus, ClientInfo, IspKey } from "@/lib/types";
 import { Badge, Button, Card, CardBody, CardHeader, CodeBox, Empty, Field, Input, Modal, Progress, Select, Switch, Textarea, useToast } from "@/components/ui";
@@ -83,10 +83,7 @@ export function ClientsPage() {
 }
 
 function isClientOnline(client: ClientInfo): boolean {
-  if (!client.allowed || !client.isOnline || !client.lastSeenAt) return false;
-  const lastSeen = parseUtc(client.lastSeenAt).getTime();
-  if (!Number.isFinite(lastSeen) || lastSeen <= 0) return false;
-  return Date.now() - lastSeen <= 3 * 60 * 1000;
+  return client.allowed && client.isOnline;
 }
 
 function EditModal({ client, onClose, onSaved }: { client: ClientInfo | null; onClose: () => void; onSaved: () => Promise<void> }) {
