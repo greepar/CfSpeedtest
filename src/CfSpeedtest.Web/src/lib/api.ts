@@ -1,4 +1,5 @@
 import type { ApiResponse } from "./types";
+import { syncServerClock } from "./serverClock";
 
 // 401 时的全局回调（由 LoginGate 注册），用于弹出登录框。
 let onUnauthorized: (() => void) | null = null;
@@ -51,6 +52,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   } catch {
     throw new ApiError("网络请求失败，请检查服务端是否在线", 0);
   }
+  syncServerClock(res.headers.get("Date"));
 
   if (res.status === 401) {
     if (!silent401 && onUnauthorized) onUnauthorized();

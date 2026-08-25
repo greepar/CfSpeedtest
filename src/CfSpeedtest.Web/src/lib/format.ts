@@ -1,3 +1,5 @@
+import { serverNow } from "./serverClock";
+
 export type ClassValue =
   | string
   | number
@@ -80,7 +82,7 @@ export function timeAgo(iso?: string | null): string {
   if (!iso) return "从未";
   const d = parseUtc(iso);
   if (isNaN(d.getTime())) return "-";
-  const diff = Date.now() - d.getTime();
+  const diff = serverNow() - d.getTime();
   if (diff < 0) return "刚刚";
   const sec = Math.floor(diff / 1000);
   if (sec < 60) return `${sec} 秒前`;
@@ -97,7 +99,7 @@ export function timeAgo(iso?: string | null): string {
 export function countdownTo(targetIso?: string | null, nowMs?: number): string {
   if (!targetIso) return "--:--";
   const target = parseUtc(targetIso).getTime();
-  const now = nowMs ?? Date.now();
+  const now = nowMs ?? serverNow();
   let s = Math.max(0, Math.floor((target - now) / 1000));
   const h = Math.floor(s / 3600);
   s -= h * 3600;

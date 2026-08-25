@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { Database, Gauge, History, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { countdownTo, formatDateTime, formatNumber, formatSpeed, timeAgo } from "@/lib/format";
+import { serverNow } from "@/lib/serverClock";
 import { ispBadgeTone, ispLabel } from "@/lib/isp";
 import type { ClientInfo, IpPoolMap, RoundStatusOverview, TestHistory } from "@/lib/types";
 import { Badge, Card, CardBody, CardHeader, Empty, Progress, Spinner } from "@/components/ui";
@@ -13,7 +14,7 @@ export function Overview() {
   const [rounds, setRounds] = useState<RoundStatusOverview | null>(null);
   const [pool, setPool] = useState<IpPoolMap>({});
   const [loading, setLoading] = useState(true);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(serverNow());
 
   async function load() {
     const [c, h, r, p] = await Promise.all([
@@ -32,7 +33,7 @@ export function Overview() {
   useEffect(() => {
     load().catch(() => setLoading(false));
     const t = window.setInterval(() => load().catch(() => {}), 10000);
-    const clock = window.setInterval(() => setNow(Date.now()), 1000);
+    const clock = window.setInterval(() => setNow(serverNow()), 1000);
     return () => { window.clearInterval(t); window.clearInterval(clock); };
   }, []);
 
