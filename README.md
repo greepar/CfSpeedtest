@@ -96,26 +96,13 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 
 ## Docker Compose
 
-使用 GHCR 中的 Server 和 Client 镜像：
-
 ```bash
 docker compose up -d
-```
-
-默认使用 `latest` 镜像。更新到最新镜像并重启服务：
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-固定使用某个版本：
-
-```bash
+docker compose pull && docker compose up -d
 IMAGE_TAG=v1.9.7 docker compose up -d
 ```
 
-也可以复制 `docker-compose.example.env` 为 `.env`，配置服务端端口、客户端运营商、客户端名称和固定版本。Server 的配置、历史记录和客户端更新文件保存在 Docker volumes 中，更新镜像不会丢失。
+需要自定义配置时，复制 `docker-compose.example.env` 为 `.env`。
 
 WebUI 顶部有 5 个主页面：
 
