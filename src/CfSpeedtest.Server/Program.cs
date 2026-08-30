@@ -1118,6 +1118,26 @@ app.MapPost("/api/ippool/source/remove", (string isp, FetchSource source, DataSt
         : ApiResponse<string>.Fail("拉取源不存在");
 });
 
+app.MapPost("/api/ippool/source/add", (string isp, FetchSource source, DataStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(isp) || string.IsNullOrWhiteSpace(source.Value))
+    {
+        return ApiResponse<string>.Fail("Isp and source value are required");
+    }
+    if (isp != "Telecom" && isp != "Unicom" && isp != "Mobile")
+    {
+        return ApiResponse<string>.Fail("Unsupported ISP");
+    }
+    if (!Enum.IsDefined(source.Type))
+    {
+        return ApiResponse<string>.Fail("Unsupported source type");
+    }
+
+    return store.AddFetchSource(isp, source)
+        ? ApiResponse<string>.Ok("拉取源已保存")
+        : ApiResponse<string>.Fail("相同的拉取源已存在");
+});
+
 // ============================================================
 //  API: WebUI - 手动触发API拉取IP
 // ============================================================

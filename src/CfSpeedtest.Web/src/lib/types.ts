@@ -198,3 +198,13 @@ export interface BootstrapTokenStatus {
   lastSeenAtUtc?: string | null;
   runtimeStatus?: string | null;
 }
+
+export interface ClientInstallScriptResponse {
+  platform: "linux" | "windows" | "macos";
+  scriptType: "install" | "manual" | "uninstall";
+  serviceKind: string;
+  scriptFileName: string;
+  scriptSource: string;
+  scriptUrl: string;
+  script: string;
+}

@@ -64,6 +64,13 @@ export function IpPoolPage() {
     await load();
   }
 
+  async function saveSource() {
+    const source: FetchSource = { type: previewType, value: ips.trim() };
+    await api.post<string>("/api/ippool/source/add", source, { isp });
+    toast("拉取源已保存", "success");
+    await load();
+  }
+
   async function refresh() {
     await api.post<string>("/api/ippool/refresh", undefined, { isp });
     toast("已触发刷新", "success");
@@ -136,6 +143,7 @@ export function IpPoolPage() {
                 <Button onClick={add} disabled={!inputIps.length}><Plus className="h-4 w-4" />添加</Button>
                 <Button variant="secondary" onClick={() => setReplaceOpen(true)} disabled={!inputIps.length}>覆盖手动池</Button>
                 <Button variant="secondary" onClick={doPreview} disabled={!ips.trim()}><Search className="h-4 w-4" />预览源</Button>
+                <Button variant="secondary" onClick={saveSource} disabled={!ips.trim()}><Plus className="h-4 w-4" />保存拉取源</Button>
               </div>
 
               {preview && <div>

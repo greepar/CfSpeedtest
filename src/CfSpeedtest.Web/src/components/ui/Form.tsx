@@ -30,7 +30,7 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 
 export function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <button type="button" disabled={disabled} onClick={() => onChange(!checked)} className={cn("relative h-6 w-11 rounded-full border transition", checked ? "border-primary bg-primary" : "border-border-strong bg-surface-2", disabled && "opacity-50")}>
+    <button type="button" disabled={disabled} onClick={() => onChange(!checked)} className={cn("relative h-6 w-11 shrink-0 rounded-full border transition", checked ? "border-primary bg-primary" : "border-border-strong bg-surface-2", disabled && "opacity-50")}>
       <span className={cn("absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition dark:bg-fg", checked ? "left-5" : "left-0.5")} />
     </button>
   );

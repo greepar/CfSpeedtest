@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ServerConfig } from "@/lib/types";
+import { ISP_KEYS, ispLabel } from "@/lib/isp";
+import type { HuaweiDnsRecordConfig, IspKey, ServerConfig } from "@/lib/types";
 import { Button, Card, CardBody, CardHeader, Field, Input, Select, Switch, useToast } from "@/components/ui";
 
 export function ConfigPage() {
@@ -16,6 +17,13 @@ export function ConfigPage() {
   if (!cfg) return <div className="py-8 text-center text-sm text-fg-muted">加载配置中...</div>;
 
   const set = <K extends keyof ServerConfig>(k: K, v: ServerConfig[K]) => setCfg({ ...cfg, [k]: v });
+  const setDnsRecord = (isp: IspKey, patch: Partial<HuaweiDnsRecordConfig>) => {
+    const current = cfg.huaweiDns.records?.[isp] ?? { zoneId: "", recordSetId: "", domain: "", ttl: 60 };
+    set("huaweiDns", {
+      ...cfg.huaweiDns,
+      records: { ...cfg.huaweiDns.records, [isp]: { ...current, ...patch } },
+    });
+  };
 
   async function save() {
     setSaving(true);
@@ -48,6 +56,7 @@ export function ConfigPage() {
           <Num label="客户端间隔（分钟）" value={cfg.clientIntervalMinutes} onChange={(v) => set("clientIntervalMinutes", v)} />
           <Num label="心跳间隔（秒）" value={cfg.heartbeatIntervalSeconds} onChange={(v) => set("heartbeatIntervalSeconds", v)} />
           <Num label="历史保留天数" value={cfg.historyRetentionDays} onChange={(v) => set("historyRetentionDays", v)} />
+          <Num label="IP 源自动拉取间隔（分钟）" value={cfg.apiRefreshIntervalMinutes} onChange={(v) => set("apiRefreshIntervalMinutes", v)} />
           <Num label="最低下载速度 KB/s" value={cfg.minDownloadSpeedKBps} onChange={(v) => set("minDownloadSpeedKBps", v)} />
           <Num label="下载限速 KB/s（0不限）" value={cfg.maxDownloadSpeedKBps} onChange={(v) => set("maxDownloadSpeedKBps", v)} />
         </CardBody>
@@ -83,6 +92,13 @@ export function ConfigPage() {
       </Card>
 
       <Card>
+        <CardHeader title="WebUI 安全" desc="用户名和密码请使用页面顶部的“修改密码”功能管理" />
+        <CardBody>
+          <Toggle label="启用 WebUI 登录保护" checked={cfg.webUiAuth.enabled} onChange={(v) => set("webUiAuth", { ...cfg.webUiAuth, enabled: v })} />
+        </CardBody>
+      </Card>
+
+      <Card>
         <CardHeader title="华为云 DNS" desc="DNS 自动更新参数" />
         <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Toggle label="启用 DNS 自动更新" checked={cfg.huaweiDns.enabled} onChange={(v) => set("huaweiDns", { ...cfg.huaweiDns, enabled: v })} />
@@ -90,6 +106,18 @@ export function ConfigPage() {
           <Num label="更新间隔（分钟）" value={cfg.huaweiDns.updateIntervalMinutes} onChange={(v) => set("huaweiDns", { ...cfg.huaweiDns, updateIntervalMinutes: v })} />
           <Field label="Access Key"><Input value={cfg.huaweiDns.accessKey} onChange={(e) => set("huaweiDns", { ...cfg.huaweiDns, accessKey: e.target.value })} /></Field>
           <Field label="Secret Key"><Input type="password" value={cfg.huaweiDns.secretKey} onChange={(e) => set("huaweiDns", { ...cfg.huaweiDns, secretKey: e.target.value })} /></Field>
+          <div className="grid gap-4 md:col-span-2 md:grid-cols-2 xl:col-span-3 xl:grid-cols-3">
+            {ISP_KEYS.map((isp) => {
+              const record = cfg.huaweiDns.records?.[isp] ?? { zoneId: "", recordSetId: "", domain: "", ttl: 60 };
+              return <div key={isp} className="space-y-3 rounded-xl border border-border bg-surface p-4">
+                <div className="font-medium text-fg">{ispLabel(isp)} DNS 记录</div>
+                <Field label="Zone ID（域名 ID）"><Input value={record.zoneId} onChange={(e) => setDnsRecord(isp, { zoneId: e.target.value })} /></Field>
+                <Field label="RecordSet ID（记录集 ID）"><Input value={record.recordSetId} onChange={(e) => setDnsRecord(isp, { recordSetId: e.target.value })} /></Field>
+                <Field label="完整域名"><Input value={record.domain} placeholder="例如 ct.example.com." onChange={(e) => setDnsRecord(isp, { domain: e.target.value })} /></Field>
+                <Num label="TTL（秒）" value={record.ttl} onChange={(v) => setDnsRecord(isp, { ttl: v })} />
+              </div>;
+            })}
+          </div>
         </CardBody>
       </Card>
     </div>

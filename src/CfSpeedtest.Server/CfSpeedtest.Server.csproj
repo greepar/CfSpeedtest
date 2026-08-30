@@ -14,9 +14,9 @@
     <SelfContained Condition="'$(PublishAot)' == 'true'">true</SelfContained>
     <IsAotCompatible>true</IsAotCompatible>
     <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
-    <Version>1.9.2</Version>
-    <AssemblyVersion>1.9.2.0</AssemblyVersion>
-    <FileVersion>1.9.2.0</FileVersion>
+    <Version>1.9.3</Version>
+    <AssemblyVersion>1.9.3.0</AssemblyVersion>
+    <FileVersion>1.9.3.0</FileVersion>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
   </PropertyGroup>
@@ -27,12 +27,14 @@
     <None Remove="wwwroot\**" />
     <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
     <Content Update="web.config" CopyToPublishDirectory="Never" />
-    <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- 构建 Server 前自动运行前端构建（npm/node 不可用时跳过，不阻断编译） -->
-  <Target Name="BuildWebUi" BeforeTargets="CoreCompile" Condition="'$(DesignTimeBuild)' != 'true' and '$(SkipBuildWebUi)' != 'true'">
-    <Exec Command="npm run build" WorkingDirectory="..\CfSpeedtest.Web" ContinueOnError="true" IgnoreExitCode="true" />
+  <Target Name="BuildWebUi" BeforeTargets="PrepareResources" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="npm run build" WorkingDirectory="..\CfSpeedtest.Web" ContinueOnError="true" IgnoreExitCode="true" Condition="'$(SkipBuildWebUi)' != 'true'" />
+    <ItemGroup>
+      <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
   </Target>
 
 </Project>
