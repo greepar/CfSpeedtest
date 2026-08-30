@@ -14,9 +14,9 @@
     <SelfContained Condition="'$(PublishAot)' == 'true'">true</SelfContained>
     <IsAotCompatible>true</IsAotCompatible>
     <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
-    <Version>1.9.3</Version>
-    <AssemblyVersion>1.9.3.0</AssemblyVersion>
-    <FileVersion>1.9.3.0</FileVersion>
+    <Version>1.9.4</Version>
+    <AssemblyVersion>1.9.4.0</AssemblyVersion>
+    <FileVersion>1.9.4.0</FileVersion>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
   </PropertyGroup>
@@ -30,10 +30,11 @@
   </ItemGroup>
 
   <!-- 构建 Server 前自动运行前端构建（npm/node 不可用时跳过，不阻断编译） -->
-  <Target Name="BuildWebUi" BeforeTargets="PrepareResources" Condition="'$(DesignTimeBuild)' != 'true'">
+  <Target Name="BuildWebUi" BeforeTargets="AssignTargetPaths" Condition="'$(DesignTimeBuild)' != 'true'">
     <Exec Command="npm run build" WorkingDirectory="..\CfSpeedtest.Web" ContinueOnError="true" IgnoreExitCode="true" Condition="'$(SkipBuildWebUi)' != 'true'" />
     <ItemGroup>
-      <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+      <EmbeddedResource Include="wwwroot\**\*" />
+      <EmbeddedResource Update="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
     </ItemGroup>
   </Target>
 
