@@ -1,7 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
 ARG TARGETARCH
 WORKDIR /src
-RUN apk add --no-cache clang lld build-base zlib-dev openssl-dev icu-data-full
 COPY src/CfSpeedtest.Shared/CfSpeedtest.Shared.csproj src/CfSpeedtest.Shared/
 COPY src/CfSpeedtest.Client/CfSpeedtest.Client.csproj src/CfSpeedtest.Client/
 RUN case "$TARGETARCH" in \
@@ -16,11 +15,10 @@ RUN case "$TARGETARCH" in \
       arm64) RID=linux-musl-arm64 ;; \
       *) echo "Unsupported target architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
-    dotnet publish src/CfSpeedtest.Client/CfSpeedtest.Client.csproj -c Release -r "$RID" --self-contained true -o /app/publish -p:PublishAot=true -p:PublishSingleFile=true --no-restore
+    dotnet publish src/CfSpeedtest.Client/CfSpeedtest.Client.csproj -c Release -r "$RID" --self-contained false -o /app/publish -p:PublishAot=false -p:PublishSingleFile=false --no-restore
 
-FROM alpine:3.22 AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine AS runtime
 WORKDIR /app
-RUN apk add --no-cache libstdc++ openssl
 COPY --from=build /app/publish/ ./
 COPY docker/client-entrypoint.sh /usr/local/bin/cfspeedtest-client
 RUN chmod +x /usr/local/bin/cfspeedtest-client

@@ -112,7 +112,7 @@ docker compose up -d
 固定使用某个版本：
 
 ```bash
-IMAGE_TAG=v1.9.6 docker compose up -d
+IMAGE_TAG=v1.9.7 docker compose up -d
 ```
 
 也可以复制 `docker-compose.example.env` 为 `.env`，配置服务端端口、客户端运营商、客户端名称和固定版本。Server 的配置、历史记录和客户端更新文件保存在 Docker volumes 中，更新镜像不会丢失。
