@@ -1,0 +1,28 @@
+services:
+  server:
+    image: ghcr.io/greepar/cfspeedtest-server:${IMAGE_TAG:-latest}
+    container_name: cfspeedtest-server
+    restart: unless-stopped
+    ports:
+      - "${CF_SERVER_PORT:-5000}:5000"
+    volumes:
+      - cfspeedtest-data:/app/data
+      - cfspeedtest-updates:/app/client-updates
+
+  client:
+    image: ghcr.io/greepar/cfspeedtest-client:${IMAGE_TAG:-latest}
+    container_name: cfspeedtest-client
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      CF_SERVER_URL: ${CF_SERVER_URL:-http://server:5000}
+      CF_ISP: ${CF_ISP:-Telecom}
+      CF_CLIENT_NAME: ${CF_CLIENT_NAME:-docker-client}
+      CF_CLIENT_ID: ${CF_CLIENT_ID:-}
+      CF_INTERVAL: ${CF_INTERVAL:-60}
+      CF_DISABLE_AUTO_UPDATE: ${CF_DISABLE_AUTO_UPDATE:-}
+
+volumes:
+  cfspeedtest-data:
+  cfspeedtest-updates:

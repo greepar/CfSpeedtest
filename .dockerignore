@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+**/bin
+**/obj
+src/CfSpeedtest.Web/node_modules
+src/CfSpeedtest.Web/dist
+src/CfSpeedtest.Server/wwwroot
+publish
+docs/node_modules
