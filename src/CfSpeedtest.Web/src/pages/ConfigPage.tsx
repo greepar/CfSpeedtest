@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
 import { api } from "@/lib/api";
-import { ISP_KEYS, ispLabel } from "@/lib/isp";
-import type { HuaweiDnsRecordConfig, IspKey, ServerConfig } from "@/lib/types";
+import type { ServerConfig } from "@/lib/types";
 import { Button, Card, CardBody, CardHeader, Field, Input, Select, Switch, useToast } from "@/components/ui";
 
 export function ConfigPage() {
@@ -17,13 +16,6 @@ export function ConfigPage() {
   if (!cfg) return <div className="py-8 text-center text-sm text-fg-muted">加载配置中...</div>;
 
   const set = <K extends keyof ServerConfig>(k: K, v: ServerConfig[K]) => setCfg({ ...cfg, [k]: v });
-  const setDnsRecord = (isp: IspKey, patch: Partial<HuaweiDnsRecordConfig>) => {
-    const current = cfg.huaweiDns.records?.[isp] ?? { zoneId: "", recordSetId: "", domain: "", ttl: 60 };
-    set("huaweiDns", {
-      ...cfg.huaweiDns,
-      records: { ...cfg.huaweiDns.records, [isp]: { ...current, ...patch } },
-    });
-  };
 
   async function save() {
     setSaving(true);
@@ -98,28 +90,6 @@ export function ConfigPage() {
         </CardBody>
       </Card>
 
-      <Card>
-        <CardHeader title="华为云 DNS" desc="DNS 自动更新参数" />
-        <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Toggle label="启用 DNS 自动更新" checked={cfg.huaweiDns.enabled} onChange={(v) => set("huaweiDns", { ...cfg.huaweiDns, enabled: v })} />
-          <Field label="Endpoint"><Input value={cfg.huaweiDns.endpoint} onChange={(e) => set("huaweiDns", { ...cfg.huaweiDns, endpoint: e.target.value })} /></Field>
-          <Num label="更新间隔（分钟）" value={cfg.huaweiDns.updateIntervalMinutes} onChange={(v) => set("huaweiDns", { ...cfg.huaweiDns, updateIntervalMinutes: v })} />
-          <Field label="Access Key"><Input value={cfg.huaweiDns.accessKey} onChange={(e) => set("huaweiDns", { ...cfg.huaweiDns, accessKey: e.target.value })} /></Field>
-          <Field label="Secret Key"><Input type="password" value={cfg.huaweiDns.secretKey} onChange={(e) => set("huaweiDns", { ...cfg.huaweiDns, secretKey: e.target.value })} /></Field>
-          <div className="grid gap-4 md:col-span-2 md:grid-cols-2 xl:col-span-3 xl:grid-cols-3">
-            {ISP_KEYS.map((isp) => {
-              const record = cfg.huaweiDns.records?.[isp] ?? { zoneId: "", recordSetId: "", domain: "", ttl: 60 };
-              return <div key={isp} className="space-y-3 rounded-xl border border-border bg-surface p-4">
-                <div className="font-medium text-fg">{ispLabel(isp)} DNS 记录</div>
-                <Field label="Zone ID（域名 ID）"><Input value={record.zoneId} onChange={(e) => setDnsRecord(isp, { zoneId: e.target.value })} /></Field>
-                <Field label="RecordSet ID（记录集 ID）"><Input value={record.recordSetId} onChange={(e) => setDnsRecord(isp, { recordSetId: e.target.value })} /></Field>
-                <Field label="完整域名"><Input value={record.domain} placeholder="例如 ct.example.com." onChange={(e) => setDnsRecord(isp, { domain: e.target.value })} /></Field>
-                <Num label="TTL（秒）" value={record.ttl} onChange={(v) => setDnsRecord(isp, { ttl: v })} />
-              </div>;
-            })}
-          </div>
-        </CardBody>
-      </Card>
     </div>
   );
 }

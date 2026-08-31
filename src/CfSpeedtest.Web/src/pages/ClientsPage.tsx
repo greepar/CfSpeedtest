@@ -13,6 +13,7 @@ export function ClientsPage() {
   const [edit, setEdit] = useState<ClientInfo | null>(null);
   const [deploy, setDeploy] = useState<ClientInfo | null>(null);
   const [logClient, setLogClient] = useState<ClientInfo | null>(null);
+  const [uninstall, setUninstall] = useState<ClientInfo | null>(null);
 
   async function load(showLoading = false) {
     if (showLoading || items.length === 0) setLoading(true);
@@ -65,7 +66,7 @@ export function ClientsPage() {
                         <td className="w-44"><Progress value={pct} /><div className="mt-1 text-xs text-fg-subtle">{c.currentTaskTestedIps}/{c.currentTaskTotalIps}</div></td>
                         <td><div>{c.version || "-"}</div><div className="text-xs text-fg-subtle">{c.platform || "-"}</div></td>
                         <td><div>{timeAgo(c.lastSeenAt)}</div><div className="text-xs text-fg-subtle">{formatDateTime(c.lastSeenAt)}</div></td>
-                        <td><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" title="日志" onClick={() => setLogClient(c)}><FileText className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="编辑" onClick={() => setEdit(c)}><Edit3 className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="测速" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-test`), "已触发测速")}><Play className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="更新" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-update`), "已触发更新检查")}><UploadCloud className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="部署命令" onClick={() => setDeploy(c)}><Rocket className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="删除" onClick={() => confirm("确定删除该客户端？") && doIt(() => api.del<string>(`/api/clients/${encodeURIComponent(c.clientId)}`), "客户端已删除")}><Trash2 className="h-4 w-4 text-danger" /></Button></div></td>
+                         <td><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" title="日志" onClick={() => setLogClient(c)}><FileText className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="编辑" onClick={() => setEdit(c)}><Edit3 className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="测速" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-test`), "已触发测速")}><Play className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="更新" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-update`), "已触发更新检查")}><UploadCloud className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="部署命令" onClick={() => setDeploy(c)}><Rocket className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="卸载客户端" onClick={() => setUninstall(c)}><Trash2 className="h-4 w-4 text-danger" /></Button></div></td>
                       </tr>
                     );
                   })}
@@ -77,6 +78,7 @@ export function ClientsPage() {
       </Card>
       <EditModal client={edit} onClose={() => setEdit(null)} onSaved={() => load(false)} />
       <DeployModal client={deploy} onClose={() => setDeploy(null)} onChanged={() => load(false)} />
+      <UninstallModal client={uninstall} onClose={() => setUninstall(null)} onDeleted={() => load(false)} />
       <ClientLogModal client={logClient} onClose={() => setLogClient(null)} />
     </div>
   );
@@ -98,28 +100,36 @@ function ClientLogModal({ client, onClose }: { client: ClientInfo | null; onClos
   return <Modal open={!!client} title="客户端日志" onClose={onClose} maxWidth="max-w-4xl"><div className="space-y-3"><div className="grid gap-2 text-sm sm:grid-cols-2"><div><span className="text-fg-subtle">节点：</span>{client?.name || client?.clientId.slice(0, 8)}</div><div><span className="text-fg-subtle">运行：</span>{client?.runtimeStatus || "-"}</div><div><span className="text-fg-subtle">最后心跳：</span>{client?.lastSeenAt ? formatDateTime(client.lastSeenAt) : "-"}</div><div><span className="text-fg-subtle">版本：</span>{client?.version || "-"} / {client?.platform || "-"}</div></div>{log ? <Textarea readOnly value={log} className="min-h-[360px] font-mono text-xs" /> : <Empty title="暂无日志" desc="客户端下次心跳后会同步最近运行日志" />}</div></Modal>;
 }
 
+function UninstallModal({ client, onClose, onDeleted }: { client: ClientInfo | null; onClose: () => void; onDeleted: () => Promise<void> }) {
+  const toast = useToast();
+  const [commands, setCommands] = useState<{ linux: string; macos: string; windows: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { setCommands(null); }, [client]);
+  async function loadCommands() {
+    if (!client?.clientId) return;
+    setLoading(true);
+    try {
+      const request = (platform: "linux" | "macos" | "windows") => api.post<ClientInstallScriptResponse>("/api/client/install-script", { platform, scriptType: "uninstall", clientId: client.clientId });
+      const [linux, macos, windows] = await Promise.all([request("linux"), request("macos"), request("windows")]);
+      setCommands({ linux: linux.script, macos: macos.script, windows: windows.script });
+    } finally { setLoading(false); }
+  }
+  async function copy(value: string) { await navigator.clipboard.writeText(value); toast("已复制命令", "success"); }
+  async function deleteRecord() { if (!client) return; if (!confirm("确定删除该客户端记录？")) return; await api.del<string>(`/api/clients/${encodeURIComponent(client.clientId)}`); toast("客户端已删除", "success"); onClose(); await onDeleted(); }
+  return <Modal open={!!client} title="卸载客户端" onClose={onClose} maxWidth="max-w-3xl" footer={<><Button variant="secondary" onClick={onClose}>关闭</Button><Button variant="danger" onClick={deleteRecord}>删除客户端记录</Button></>}><div className="space-y-4"><div className="text-sm text-fg-muted">节点：{client?.name || client?.clientId.slice(0, 8)}</div><Button onClick={loadCommands} disabled={loading}>{loading ? "获取中..." : "获取卸载命令"}</Button>{commands && <div className="space-y-3"><CommandBlock title="Linux Bash" value={commands.linux} onCopy={() => copy(commands.linux)} /><CommandBlock title="macOS Bash" value={commands.macos} onCopy={() => copy(commands.macos)} /><CommandBlock title="Windows PowerShell" value={commands.windows} onCopy={() => copy(commands.windows)} /></div>}</div></Modal>;
+}
+
+function CommandBlock({ title, value, onCopy }: { title: string; value: string; onCopy: () => void }) {
+  return <div><div className="mb-2 flex items-center justify-between text-sm font-medium">{title}<Button variant="ghost" size="sm" onClick={onCopy}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={value} /></div>;
+}
+
 function DeployModal({ client, onClose, onChanged }: { client: ClientInfo | null; onClose: () => void; onChanged: () => Promise<void> }) {
-  const toast = useToast(); const [name, setName] = useState(""); const [isp, setIsp] = useState<IspKey>("Telecom"); const [serverUrl, setServerUrl] = useState(location.origin); const [includeProxy, setIncludeProxy] = useState(true); const [disableAutoUpdate, setDisableAutoUpdate] = useState(false); const [res, setRes] = useState<BootstrapTokenCreateResponse | null>(null); const [status, setStatus] = useState<BootstrapTokenStatus | null>(null); const [uninstallCommands, setUninstallCommands] = useState<{ bash: string; powershell: string } | null>(null); const [loadingUninstall, setLoadingUninstall] = useState(false);
-  useEffect(() => { if (client) { setName(client.name || ""); setIsp(ispKey(client.isp)); setRes(null); setStatus(null); setUninstallCommands(null); setLoadingUninstall(false); } }, [client]);
+  const toast = useToast(); const [name, setName] = useState(""); const [isp, setIsp] = useState<IspKey>("Telecom"); const [serverUrl, setServerUrl] = useState(location.origin); const [includeProxy, setIncludeProxy] = useState(true); const [disableAutoUpdate, setDisableAutoUpdate] = useState(false); const [res, setRes] = useState<BootstrapTokenCreateResponse | null>(null); const [status, setStatus] = useState<BootstrapTokenStatus | null>(null);
+  useEffect(() => { if (client) { setName(client.name || ""); setIsp(ispKey(client.isp)); setRes(null); setStatus(null); } }, [client]);
   useEffect(() => { if (!res) return; const poll = () => api.get<BootstrapTokenStatus>(`/api/bootstrap/${encodeURIComponent(res.token)}/status`, undefined, true).then((s) => { setStatus(s); if (s.consumed || s.online) onChanged().catch(() => {}); }).catch(() => {}); poll(); const t = setInterval(poll, 2500); return () => clearInterval(t); }, [res]);
   async function create() { const r = await api.post<BootstrapTokenCreateResponse>("/api/bootstrap/create", { name, isp, serverUrl, includeProxy, disableAutoUpdate, clientId: client?.clientId || undefined }); setRes(r); toast("部署命令已生成", "success"); await onChanged(); }
   async function copy(v: string) { await navigator.clipboard.writeText(v); toast("已复制命令", "success"); }
-  async function loadUninstallCommands() {
-    if (!client?.clientId) return;
-    setLoadingUninstall(true);
-    try {
-      const request = (platform: "linux" | "windows") => api.post<ClientInstallScriptResponse>("/api/client/install-script", {
-        platform,
-        scriptType: "uninstall",
-        clientId: client.clientId,
-      });
-      const [linux, windows] = await Promise.all([request("linux"), request("windows")]);
-      setUninstallCommands({ bash: linux.script, powershell: windows.script });
-    } finally {
-      setLoadingUninstall(false);
-    }
-  }
   const stateTone = status?.online ? "success" : status?.consumed ? "primary" : status?.expired ? "danger" : "warning";
   const stateText = status?.online ? "已上线" : status?.consumed ? "已添加" : status?.expired ? "已过期" : "等待上线";
-  return <Modal open={!!client} title="一键部署客户端" onClose={onClose} maxWidth="max-w-3xl"><div className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><Field label="客户端名称"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="留空自动生成" /></Field><Field label="运营商"><Select value={isp} onChange={(e) => setIsp(e.target.value as IspKey)}>{ISP_KEYS.map((k) => <option key={k} value={k}>{ispLabel(k)}</option>)}</Select></Field><Field label="服务端地址"><Input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} /></Field><div className="grid gap-3 text-sm"><label className="flex items-center justify-between rounded-lg border border-border p-3">携带 GH Proxy<Switch checked={includeProxy} onChange={setIncludeProxy} /></label><label className="flex items-center justify-between rounded-lg border border-border p-3">禁用自动更新<Switch checked={disableAutoUpdate} onChange={setDisableAutoUpdate} /></label></div></div><Button onClick={create}><Rocket className="h-4 w-4" />生成命令</Button>{res && <div className="space-y-3 rounded-xl border border-border bg-surface p-4"><div className="flex flex-wrap gap-2 text-sm"><Badge tone="primary">Token {res.token}</Badge><Badge tone={stateTone}>{stateText}</Badge><span className="text-fg-muted">过期时间：{formatDateTime(res.expiresAtUtc)}</span></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Linux / macOS<Button variant="ghost" size="sm" onClick={() => copy(res.linuxCommand)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={res.linuxCommand} /></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Windows PowerShell<Button variant="ghost" size="sm" onClick={() => copy(res.windowsCommand)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={res.windowsCommand} /></div>{status?.runtimeStatus && <Textarea readOnly value={status.runtimeStatus} />}</div>}{client?.clientId && <div className="space-y-3 rounded-xl border border-danger/30 bg-danger/5 p-4"><div className="flex items-center justify-between gap-3"><div><div className="font-medium text-fg">卸载客户端</div><div className="text-sm text-fg-muted">在客户端设备上运行对应命令</div></div><Button variant="secondary" size="sm" disabled={loadingUninstall} onClick={loadUninstallCommands}><Trash2 className="h-4 w-4" />{loadingUninstall ? "获取中..." : "获取卸载命令"}</Button></div>{uninstallCommands && <><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Linux Bash<Button variant="ghost" size="sm" onClick={() => copy(uninstallCommands.bash)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={uninstallCommands.bash} /></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Windows PowerShell<Button variant="ghost" size="sm" onClick={() => copy(uninstallCommands.powershell)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={uninstallCommands.powershell} /></div></>}</div>}</div></Modal>;
+  return <Modal open={!!client} title="一键部署客户端" onClose={onClose} maxWidth="max-w-3xl"><div className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><Field label="客户端名称"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="留空自动生成" /></Field><Field label="运营商"><Select value={isp} onChange={(e) => setIsp(e.target.value as IspKey)}>{ISP_KEYS.map((k) => <option key={k} value={k}>{ispLabel(k)}</option>)}</Select></Field><Field label="服务端地址"><Input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} /></Field><div className="grid gap-3 text-sm"><label className="flex items-center justify-between rounded-lg border border-border p-3">携带 GH Proxy<Switch checked={includeProxy} onChange={setIncludeProxy} /></label><label className="flex items-center justify-between rounded-lg border border-border p-3">禁用自动更新<Switch checked={disableAutoUpdate} onChange={setDisableAutoUpdate} /></label></div></div><Button onClick={create}><Rocket className="h-4 w-4" />生成命令</Button>{res && <div className="space-y-3 rounded-xl border border-border bg-surface p-4"><div className="flex flex-wrap gap-2 text-sm"><Badge tone="primary">Token {res.token}</Badge><Badge tone={stateTone}>{stateText}</Badge><span className="text-fg-muted">过期时间：{formatDateTime(res.expiresAtUtc)}</span></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Linux / macOS<Button variant="ghost" size="sm" onClick={() => copy(res.linuxCommand)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={res.linuxCommand} /></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Windows PowerShell<Button variant="ghost" size="sm" onClick={() => copy(res.windowsCommand)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={res.windowsCommand} /></div>{status?.runtimeStatus && <Textarea readOnly value={status.runtimeStatus} />}</div>}</div></Modal>;
 }
