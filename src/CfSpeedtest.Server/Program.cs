@@ -1314,11 +1314,10 @@ static string BuildInstallCommand(string platform, string scriptUrl, ServerConfi
             args.Add("-GhProxyPrefix " + PsSingleQuote(config.ClientUpdateGhProxyPrefix.Trim()));
         }
 
-        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& { " +
-               "$tmp = Join-Path $env:TEMP " + PsSingleQuote("install-cfspeedtest-client.ps1") + "; " +
-               "irm " + PsSingleQuote(scriptUrl) + " -OutFile $tmp; " +
-               "& powershell -ExecutionPolicy Bypass -File $tmp " + string.Join(" ", args) +
-               " }\"";
+        var script = "$tmp = Join-Path $env:TEMP " + PsSingleQuote("install-cfspeedtest-client.ps1") + "; " +
+                     "irm " + PsSingleQuote(scriptUrl) + " -OutFile $tmp; " +
+                     "& powershell.exe -ExecutionPolicy Bypass -File $tmp " + string.Join(" ", args);
+        return BuildEncodedPowerShellCommand(script);
     }
 
     var suffix = new List<string>
@@ -1343,13 +1342,19 @@ static string BuildUninstallCommand(string platform)
 {
     if (platform == "windows")
     {
-        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"" +
-               "$serviceName='CfSpeedtestClient';" +
-               "$installDir=Join-Path $env:ProgramFiles 'CfSpeedtestClient';" +
-               "$nssmExe=Join-Path $installDir 'nssm\\nssm.exe';" +
-               "if (Test-Path $nssmExe) { & $nssmExe stop $serviceName | Out-Null; & $nssmExe remove $serviceName confirm | Out-Null };" +
-               "if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }" +
-               "\"";
+        var uninstallScript = "$ErrorActionPreference='Stop';" +
+                              "$serviceName='CfSpeedtestClient';" +
+                              "$installDir=Join-Path $env:ProgramFiles 'CfSpeedtestClient';" +
+                              "$nssmExe=Join-Path $installDir 'nssm\\nssm.exe';" +
+                              "if(Test-Path -LiteralPath $nssmExe){& $nssmExe stop $serviceName|Out-Null;Start-Sleep -Seconds 2;& $nssmExe remove $serviceName confirm|Out-Null}else{& sc.exe stop $serviceName|Out-Null;Start-Sleep -Seconds 2;& sc.exe delete $serviceName|Out-Null};" +
+                              "Get-Process -Name 'CfSpeedtest.Client' -ErrorAction SilentlyContinue|Stop-Process -Force -ErrorAction SilentlyContinue;" +
+                              "for($i=0;$i -lt 5 -and (Test-Path -LiteralPath $installDir);$i++){Start-Sleep -Seconds 1;try{Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction Stop}catch{if($i -eq 4){throw}}};" +
+                              "Write-Host '[CfSpeedtest] 客户端已卸载'";
+        var elevatedCommand = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(uninstallScript));
+        var launcherScript = "$isAdmin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);" +
+                             "if($isAdmin){& powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + elevatedCommand + ";exit $LASTEXITCODE};" +
+                             "$p=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','" + elevatedCommand + "');exit $p.ExitCode";
+        return BuildEncodedPowerShellCommand(launcherScript);
     }
 
     if (platform == "macos")
@@ -1413,6 +1418,12 @@ static string ShellQuote(string value)
 static string PsSingleQuote(string value)
 {
     return "'" + (value ?? string.Empty).Replace("'", "''") + "'";
+}
+
+static string BuildEncodedPowerShellCommand(string script)
+{
+    var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+    return "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encoded;
 }
 
 static bool IsVersionNewer(string latestVersion, string currentVersion)
