@@ -99,7 +99,7 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 ```bash
 docker compose up -d
 docker compose pull && docker compose up -d
-IMAGE_TAG=v1.9.8 docker compose up -d
+IMAGE_TAG=v1.9.9 docker compose up -d
 ```
 
 需要自定义配置时，复制 `docker-compose.example.env` 为 `.env`。
@@ -300,6 +300,7 @@ https://doh.pub/dns-query?name=example.com&type=A
 - 应用层继续访问真实 `Host`
 - TLS/SNI 使用真实域名
 - 底层 TCP 强制连接到指定 IP
+- 使用单连接、单响应流串行读取，不发起并发下载
 
 这样可以正确测试 Cloudflare 场景下的指定 IP 性能。
 

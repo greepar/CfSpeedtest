@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Buffers;
 using System.IO.Compression;
 using System.IO;
 using System.Reflection;
@@ -1037,6 +1038,7 @@ static async Task TestTcpAsync(IpTestResult result, string ip, int port, int dur
 static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTemplate,
     string host, int port, int durationSeconds, double maxDownloadSpeedKBps, ClientProxySettings proxySettings)
 {
+    byte[]? buffer = null;
     try
     {
         // 构造handler:将请求发送到指定IP但使用正确的SNI
@@ -1061,6 +1063,7 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
                 TargetHost = host,
                 RemoteCertificateValidationCallback = static (_, _, _, _) => true,
             },
+            AutomaticDecompression = DecompressionMethods.None,
             PooledConnectionLifetime = TimeSpan.FromSeconds(30),
         };
 
@@ -1079,7 +1082,12 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
             handler.Proxy = null;
         }
 
-        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(durationSeconds + 10) };
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+            DefaultRequestVersion = HttpVersion.Version11,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact,
+        };
         client.DefaultRequestHeaders.Host = host;
 
         // 这里故意把 {ip} 替换为 host。
@@ -1088,38 +1096,45 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
         var url = urlTemplate.Replace("{ip}", host);
 
         // 如果URL模板本身不是完整URL, 构建默认的
-        if (!url.StartsWith("http"))
+        if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             url = $"https://{host}/__down?bytes=104857600";
 
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds + 5));
-        var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-        response.EnsureSuccessStatusCode();
-
-        using var dlStream = await response.Content.ReadAsStreamAsync(cts.Token);
-        var buffer = new byte[65536];
+        buffer = ArrayPool<byte>.Shared.Rent(256 * 1024);
         long totalBytes = 0;
+        using var setupCts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds + 10));
+        HttpResponseMessage? response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, setupCts.Token);
+        response.EnsureSuccessStatusCode();
+        Stream? dlStream = await response.Content.ReadAsStreamAsync(setupCts.Token);
+
+        using var testCts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds));
         var sw = Stopwatch.StartNew();
 
-        while (sw.Elapsed.TotalSeconds < durationSeconds)
+        try
         {
-            var read = await dlStream.ReadAsync(buffer, cts.Token);
-            if (read == 0) break;
-            totalBytes += read;
-
-            if (maxDownloadSpeedKBps > 0)
+            int read;
+            while ((read = await dlStream.ReadAsync(buffer.AsMemory(), testCts.Token)) != 0)
             {
-                var elapsedSeconds = Math.Max(sw.Elapsed.TotalSeconds, 0.001);
-                var actualKBps = totalBytes / 1024.0 / elapsedSeconds;
-                if (actualKBps > maxDownloadSpeedKBps)
+                totalBytes += read;
+
+                if (maxDownloadSpeedKBps > 0)
                 {
+                    var elapsedSeconds = Math.Max(sw.Elapsed.TotalSeconds, 0.001);
                     var targetSeconds = (totalBytes / 1024.0) / maxDownloadSpeedKBps;
-                    var delayMs = (int)Math.Ceiling((targetSeconds - elapsedSeconds) * 1000);
-                    if (delayMs > 0)
-                    {
-                        await Task.Delay(delayMs, cts.Token);
-                    }
+                    var delay = TimeSpan.FromSeconds(targetSeconds - elapsedSeconds);
+                    if (delay > TimeSpan.Zero)
+                        await Task.Delay(delay, testCts.Token);
                 }
             }
+        }
+        catch (OperationCanceledException) when (testCts.IsCancellationRequested)
+        {
+            // Reaching the configured duration is the successful end of the test.
+        }
+        finally
+        {
+            if (dlStream is not null)
+                await dlStream.DisposeAsync();
+            response?.Dispose();
         }
 
         sw.Stop();
@@ -1132,6 +1147,11 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
         var msg = ex.Message;
         if (msg.Length > 30) msg = msg[..30];
         Console.Write($"[DL ERR: {msg}] ");
+    }
+    finally
+    {
+        if (buffer is not null)
+            ArrayPool<byte>.Shared.Return(buffer);
     }
 }
 
