@@ -649,6 +649,18 @@ public class ServerConfig
     /// <summary>可选的 GH Proxy 前缀，例如 https://ghproxy.com/</summary>
     public string ClientUpdateGhProxyPrefix { get; set; } = string.Empty;
 
+    /// <summary>是否自动检查并安装服务端 GitHub Release 更新</summary>
+    public bool ServerAutoUpdateEnabled { get; set; } = true;
+
+    /// <summary>服务端自动更新检查间隔（分钟）</summary>
+    public int ServerUpdateIntervalMinutes { get; set; } = 360;
+
+    /// <summary>服务端更新 GitHub 仓库，例如 greepar/CfSpeedtest</summary>
+    public string ServerUpdateRepository { get; set; } = "greepar/CfSpeedtest";
+
+    /// <summary>服务端更新使用的可选 GH Proxy 前缀</summary>
+    public string ServerUpdateGhProxyPrefix { get; set; } = string.Empty;
+
     /// <summary>是否启用测速后自动清理IP池（只保留TopN最优IP，其余删除）</summary>
     public bool AutoCleanupEnabled { get; set; }
 

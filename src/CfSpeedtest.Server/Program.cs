@@ -46,6 +46,8 @@ builder.Services.AddSingleton<RoundCoordinatorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundCoordinatorService>());
 builder.Services.AddSingleton<ClientWsHub>();
 builder.Services.AddSingleton<WebUiAuthService>();
+builder.Services.AddSingleton<ServerUpdateService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ServerUpdateService>());
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
@@ -938,6 +940,13 @@ app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 {
     store.SaveConfig(config);
     return ApiResponse<string>.Ok("Config saved");
+});
+
+app.MapPost("/api/server/update", (ServerUpdateService updates) =>
+{
+    return updates.TriggerUpdateCheck()
+        ? ApiResponse<string>.Ok("服务端更新检查已排队")
+        : ApiResponse<string>.Ok("服务端更新检查已在等待执行");
 });
 
 // ============================================================

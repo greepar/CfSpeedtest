@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ServerConfig } from "@/lib/types";
 import { Button, Card, CardBody, CardHeader, Field, Input, Select, Switch, useToast } from "@/components/ui";
@@ -8,6 +8,7 @@ export function ConfigPage() {
   const toast = useToast();
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [saving, setSaving] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     api.get<ServerConfig>("/api/config").then(setCfg).catch(() => {});
@@ -24,6 +25,16 @@ export function ConfigPage() {
       toast("配置已保存", "success");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function checkServerUpdate() {
+    setCheckingUpdate(true);
+    try {
+      const message = await api.post<string>("/api/server/update");
+      toast(message, "success");
+    } finally {
+      setCheckingUpdate(false);
     }
   }
 
@@ -51,6 +62,20 @@ export function ConfigPage() {
           <Num label="IP 源自动拉取间隔（分钟）" value={cfg.apiRefreshIntervalMinutes} onChange={(v) => set("apiRefreshIntervalMinutes", v)} />
           <Num label="最低下载速度 KB/s" value={cfg.minDownloadSpeedKBps} onChange={(v) => set("minDownloadSpeedKBps", v)} />
           <Num label="下载限速 KB/s（0不限）" value={cfg.maxDownloadSpeedKBps} onChange={(v) => set("maxDownloadSpeedKBps", v)} />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="服务端自动更新"
+          desc="原生部署自动安装 GitHub Release；Docker 部署请更新镜像"
+          action={<Button variant="secondary" loading={checkingUpdate} onClick={checkServerUpdate}><RefreshCw className="h-4 w-4" />立即检查更新</Button>}
+        />
+        <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <Toggle label="启用服务端自动更新" checked={!!cfg.serverAutoUpdateEnabled} onChange={(v) => set("serverAutoUpdateEnabled", v)} />
+          <Num label="检查间隔（分钟）" value={cfg.serverUpdateIntervalMinutes ?? 360} onChange={(v) => set("serverUpdateIntervalMinutes", v)} />
+          <Field label="GitHub 仓库"><Input value={cfg.serverUpdateRepository ?? ""} onChange={(e) => set("serverUpdateRepository", e.target.value)} /></Field>
+          <Field label="GH Proxy 前缀"><Input value={cfg.serverUpdateGhProxyPrefix ?? ""} onChange={(e) => set("serverUpdateGhProxyPrefix", e.target.value)} /></Field>
         </CardBody>
       </Card>
 

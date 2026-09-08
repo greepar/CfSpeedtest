@@ -172,6 +172,10 @@ export interface ServerConfig {
   clientUpdateRepository: string;
   clientUpdateReleaseTag: string;
   clientUpdateGhProxyPrefix: string;
+  serverAutoUpdateEnabled: boolean;
+  serverUpdateIntervalMinutes: number;
+  serverUpdateRepository: string;
+  serverUpdateGhProxyPrefix: string;
   autoCleanupEnabled: boolean;
   huaweiDns: HuaweiDnsConfig;
   webUiAuth: WebUiAuthConfig;
