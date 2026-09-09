@@ -486,6 +486,39 @@ public class ClientInfo
     public bool Allowed { get; set; } = true;
 }
 
+public class WebhookConfig
+{
+    public bool Enabled { get; set; }
+    public string Url { get; set; } = string.Empty;
+    public List<WebhookHeader> Headers { get; set; } = [];
+    public bool NotifyClientOnline { get; set; } = true;
+    public bool NotifyClientOffline { get; set; } = true;
+    public string BodyTemplate { get; set; } = """
+        {
+          "text": "{{message}}\n事件：{{eventType}}\n发生时间：{{occurredAtUtc}}\n客户端 ID：{{clientId}}\n客户端名称：{{clientName}}\n运营商编号：{{isp}}\n运营商：{{ispName}}\n在线状态：{{online}}\n最后心跳：{{lastSeenAtUtc}}\n客户端版本：{{version}}\n客户端平台：{{platform}}"
+        }
+        """;
+}
+
+public class WebhookHeader
+{
+    public string Name { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+}
+
+public class WebhookNotification
+{
+    public string EventType { get; set; } = string.Empty;
+    public DateTime OccurredAtUtc { get; set; }
+    public string ClientId { get; set; } = string.Empty;
+    public string? ClientName { get; set; }
+    public IspType Isp { get; set; }
+    public DateTime? LastSeenAtUtc { get; set; }
+    public string? Version { get; set; }
+    public string? Platform { get; set; }
+    public string Message { get; set; } = string.Empty;
+}
+
 public enum FetchSourceType
 {
     Api = 0,
@@ -666,6 +699,9 @@ public class ServerConfig
 
     /// <summary>华为云 DNS 配置</summary>
     public HuaweiDnsConfig HuaweiDns { get; set; } = new();
+
+    /// <summary>客户端上下线 Webhook 通知配置</summary>
+    public WebhookConfig Webhook { get; set; } = new();
 
     /// <summary>WebUI 登录配置</summary>
     public WebUiAuthConfig WebUiAuth { get; set; } = new();

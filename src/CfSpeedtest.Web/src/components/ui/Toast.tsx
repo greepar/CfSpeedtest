@@ -19,8 +19,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="fixed right-4 top-4 z-[60] grid w-[min(420px,calc(100vw-2rem))] gap-2">
         {items.map((t) => (
-          <div key={t.id} className="flex animate-slide-in items-start gap-3 rounded-xl border border-border bg-card p-3 shadow-pop">
-            {t.kind === "success" ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-success" /> : t.kind === "error" ? <AlertCircle className="mt-0.5 h-5 w-5 text-danger" /> : <Info className="mt-0.5 h-5 w-5 text-info" />}
+          <div key={t.id} className="flex animate-slide-in items-center gap-3 rounded-xl border border-border bg-card p-3 shadow-pop">
+            {t.kind === "success" ? <CheckCircle2 className="h-5 w-5 shrink-0 text-success" /> : t.kind === "error" ? <AlertCircle className="h-5 w-5 shrink-0 text-danger" /> : <Info className="h-5 w-5 shrink-0 text-info" />}
             <div className="min-w-0 flex-1 text-sm text-fg">{t.message}</div>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setItems((x) => x.filter((i) => i.id !== t.id))}><X className="h-4 w-4" /></Button>
           </div>

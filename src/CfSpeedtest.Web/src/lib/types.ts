@@ -144,6 +144,20 @@ export interface WebUiAuthConfig {
   sessions: unknown[];
 }
 
+export interface WebhookConfig {
+  enabled: boolean;
+  url: string;
+  headers: WebhookHeader[];
+  notifyClientOnline: boolean;
+  notifyClientOffline: boolean;
+  bodyTemplate: string;
+}
+
+export interface WebhookHeader {
+  name: string;
+  value: string;
+}
+
 export interface ServerConfig {
   ipSources: Record<string, IpSourceConfig>;
   apiRefreshIntervalMinutes: number;
@@ -177,6 +191,7 @@ export interface ServerConfig {
   serverUpdateRepository: string;
   serverUpdateGhProxyPrefix: string;
   autoCleanupEnabled: boolean;
+  webhook: WebhookConfig;
   huaweiDns: HuaweiDnsConfig;
   webUiAuth: WebUiAuthConfig;
 }

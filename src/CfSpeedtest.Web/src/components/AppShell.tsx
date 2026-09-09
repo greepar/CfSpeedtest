@@ -1,11 +1,11 @@
-import { Activity, Cloud, Database, FileClock, Globe2, LayoutDashboard, LogOut, Menu, Moon, Settings, Sun, Users, X } from "lucide-react";
+import { Activity, Bell, Cloud, Database, FileClock, Globe2, LayoutDashboard, LogOut, Menu, Moon, Settings, Sun, Users, X } from "lucide-react";
 import { useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Button } from "./ui";
 import { cn } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 
-export type PageKey = "overview" | "history" | "clients" | "ippool" | "dns" | "config";
+export type PageKey = "overview" | "history" | "clients" | "ippool" | "dns" | "notifications" | "config";
 
 const nav: { key: PageKey; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { key: "overview", label: "概览", icon: LayoutDashboard },
@@ -13,6 +13,7 @@ const nav: { key: PageKey; label: string; icon: ComponentType<{ className?: stri
   { key: "clients", label: "客户端", icon: Users },
   { key: "ippool", label: "IP 池", icon: Database },
   { key: "dns", label: "DNS 更新", icon: Globe2 },
+  { key: "notifications", label: "通知", icon: Bell },
   { key: "config", label: "配置", icon: Settings },
 ];
 

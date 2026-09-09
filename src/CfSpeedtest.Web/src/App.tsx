@@ -11,6 +11,7 @@ import { ClientsPage } from "@/pages/ClientsPage";
 import { IpPoolPage } from "@/pages/IpPoolPage";
 import { DnsPage } from "@/pages/DnsPage";
 import { ConfigPage } from "@/pages/ConfigPage";
+import { NotificationsPage } from "@/pages/NotificationsPage";
 
 function Inner() {
   const toast = useToast();
@@ -30,7 +31,7 @@ function Inner() {
       toast("已退出登录", "success");
       await refreshAuth();
     }
-    return <AppShell page={page} setPage={setPage} username={auth.username} version={version} onLogout={logout} onPassword={() => setPasswordOpen(true)}>{page === "overview" && <Overview />}{page === "history" && <HistoryPage />}{page === "clients" && <ClientsPage />}{page === "ippool" && <IpPoolPage />}{page === "dns" && <DnsPage />}{page === "config" && <ConfigPage />}<PasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} refreshAuth={refreshAuth} /></AppShell>;
+    return <AppShell page={page} setPage={setPage} username={auth.username} version={version} onLogout={logout} onPassword={() => setPasswordOpen(true)}>{page === "overview" && <Overview />}{page === "history" && <HistoryPage />}{page === "clients" && <ClientsPage />}{page === "ippool" && <IpPoolPage />}{page === "dns" && <DnsPage />}{page === "notifications" && <NotificationsPage />}{page === "config" && <ConfigPage />}<PasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} refreshAuth={refreshAuth} /></AppShell>;
   }}</LoginGate>;
 }
 

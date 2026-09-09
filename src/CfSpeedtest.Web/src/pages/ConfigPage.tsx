@@ -2,7 +2,17 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ServerConfig } from "@/lib/types";
-import { Button, Card, CardBody, CardHeader, Field, Input, Select, Switch, useToast } from "@/components/ui";
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Field,
+  Input,
+  Select,
+  Switch,
+  useToast,
+} from "@/components/ui";
 
 export function ConfigPage() {
   const toast = useToast();
@@ -11,12 +21,21 @@ export function ConfigPage() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
-    api.get<ServerConfig>("/api/config").then(setCfg).catch(() => {});
+    api
+      .get<ServerConfig>("/api/config")
+      .then(setCfg)
+      .catch(() => {});
   }, []);
 
-  if (!cfg) return <div className="py-8 text-center text-sm text-fg-muted">加载配置中...</div>;
+  if (!cfg)
+    return (
+      <div className="py-8 text-center text-sm text-fg-muted">
+        加载配置中...
+      </div>
+    );
 
-  const set = <K extends keyof ServerConfig>(k: K, v: ServerConfig[K]) => setCfg({ ...cfg, [k]: v });
+  const set = <K extends keyof ServerConfig>(k: K, v: ServerConfig[K]) =>
+    setCfg({ ...cfg, [k]: v });
 
   async function save() {
     setSaving(true);
@@ -44,24 +63,86 @@ export function ConfigPage() {
         <CardHeader
           title="基础测速配置"
           desc="任务分发、测速参数和阈值"
-          action={<Button loading={saving} onClick={save}><Save className="h-4 w-4" />保存配置</Button>}
+          action={
+            <Button loading={saving} onClick={save}>
+              <Save className="h-4 w-4" />
+              保存配置
+            </Button>
+          }
         />
         <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Field label="测速 URL 模板"><Input value={cfg.testUrl} onChange={(e) => set("testUrl", e.target.value)} /></Field>
-          <Field label="测速 Host"><Input value={cfg.testHost} onChange={(e) => set("testHost", e.target.value)} /></Field>
-          <Num label="测速端口" value={cfg.testPort} onChange={(v) => set("testPort", v)} />
-          <Num label="下载测速时长（秒）" value={cfg.downloadDurationSeconds} onChange={(v) => set("downloadDurationSeconds", v)} />
-          <Num label="TCP 测试时长（秒）" value={cfg.tcpTestDurationSeconds} onChange={(v) => set("tcpTestDurationSeconds", v)} />
-          <Num label="每批 IP 数" value={cfg.batchSize} onChange={(v) => set("batchSize", v)} />
-          <Num label="返回 TopN" value={cfg.topN} onChange={(v) => set("topN", v)} />
-          <Num label="单轮最多测试 IP" value={cfg.maxTestIpCount} onChange={(v) => set("maxTestIpCount", v)} />
-          <Num label="交叉测试候选 IP" value={cfg.crossTestCandidateCount ?? 0} onChange={(v) => set("crossTestCandidateCount", v)} />
-          <Num label="客户端间隔（分钟）" value={cfg.clientIntervalMinutes} onChange={(v) => set("clientIntervalMinutes", v)} />
-          <Num label="心跳间隔（秒）" value={cfg.heartbeatIntervalSeconds} onChange={(v) => set("heartbeatIntervalSeconds", v)} />
-          <Num label="历史保留天数" value={cfg.historyRetentionDays} onChange={(v) => set("historyRetentionDays", v)} />
-          <Num label="IP 源自动拉取间隔（分钟）" value={cfg.apiRefreshIntervalMinutes} onChange={(v) => set("apiRefreshIntervalMinutes", v)} />
-          <Num label="最低下载速度 KB/s" value={cfg.minDownloadSpeedKBps} onChange={(v) => set("minDownloadSpeedKBps", v)} />
-          <Num label="下载限速 KB/s（0不限）" value={cfg.maxDownloadSpeedKBps} onChange={(v) => set("maxDownloadSpeedKBps", v)} />
+          <Field label="测速 URL 模板">
+            <Input
+              value={cfg.testUrl}
+              onChange={(e) => set("testUrl", e.target.value)}
+            />
+          </Field>
+          <Field label="测速 Host">
+            <Input
+              value={cfg.testHost}
+              onChange={(e) => set("testHost", e.target.value)}
+            />
+          </Field>
+          <Num
+            label="测速端口"
+            value={cfg.testPort}
+            onChange={(v) => set("testPort", v)}
+          />
+          <Num
+            label="下载测速时长（秒）"
+            value={cfg.downloadDurationSeconds}
+            onChange={(v) => set("downloadDurationSeconds", v)}
+          />
+          <Num
+            label="TCP 测试时长（秒）"
+            value={cfg.tcpTestDurationSeconds}
+            onChange={(v) => set("tcpTestDurationSeconds", v)}
+          />
+          <Num
+            label="每批 IP 数"
+            value={cfg.batchSize}
+            onChange={(v) => set("batchSize", v)}
+          />
+          <Num
+            label="返回 TopN"
+            value={cfg.topN}
+            onChange={(v) => set("topN", v)}
+          />
+          <Num
+            label="单轮最多测试 IP"
+            value={cfg.maxTestIpCount}
+            onChange={(v) => set("maxTestIpCount", v)}
+          />
+          <Num
+            label="交叉测试候选 IP"
+            value={cfg.crossTestCandidateCount ?? 0}
+            onChange={(v) => set("crossTestCandidateCount", v)}
+          />
+          <Num
+            label="客户端间隔（分钟）"
+            value={cfg.clientIntervalMinutes}
+            onChange={(v) => set("clientIntervalMinutes", v)}
+          />
+          <Num
+            label="心跳间隔（秒）"
+            value={cfg.heartbeatIntervalSeconds}
+            onChange={(v) => set("heartbeatIntervalSeconds", v)}
+          />
+          <Num
+            label="IP 源自动拉取间隔（分钟）"
+            value={cfg.apiRefreshIntervalMinutes}
+            onChange={(v) => set("apiRefreshIntervalMinutes", v)}
+          />
+          <Num
+            label="最低下载速度 KB/s"
+            value={cfg.minDownloadSpeedKBps}
+            onChange={(v) => set("minDownloadSpeedKBps", v)}
+          />
+          <Num
+            label="下载限速 KB/s（0不限）"
+            value={cfg.maxDownloadSpeedKBps}
+            onChange={(v) => set("maxDownloadSpeedKBps", v)}
+          />
         </CardBody>
       </Card>
 
@@ -69,60 +150,173 @@ export function ConfigPage() {
         <CardHeader
           title="服务端自动更新"
           desc="原生部署自动安装 GitHub Release；Docker 部署请更新镜像"
-          action={<Button variant="secondary" loading={checkingUpdate} onClick={checkServerUpdate}><RefreshCw className="h-4 w-4" />立即检查更新</Button>}
+          action={
+            <Button
+              variant="secondary"
+              loading={checkingUpdate}
+              onClick={checkServerUpdate}
+            >
+              <RefreshCw className="h-4 w-4" />
+              立即检查更新
+            </Button>
+          }
         />
         <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Toggle label="启用服务端自动更新" checked={!!cfg.serverAutoUpdateEnabled} onChange={(v) => set("serverAutoUpdateEnabled", v)} />
-          <Num label="检查间隔（分钟）" value={cfg.serverUpdateIntervalMinutes ?? 360} onChange={(v) => set("serverUpdateIntervalMinutes", v)} />
-          <Field label="GitHub 仓库"><Input value={cfg.serverUpdateRepository ?? ""} onChange={(e) => set("serverUpdateRepository", e.target.value)} /></Field>
-          <Field label="GH Proxy 前缀"><Input value={cfg.serverUpdateGhProxyPrefix ?? ""} onChange={(e) => set("serverUpdateGhProxyPrefix", e.target.value)} /></Field>
+          <Toggle
+            label="启用服务端自动更新"
+            checked={!!cfg.serverAutoUpdateEnabled}
+            onChange={(v) => set("serverAutoUpdateEnabled", v)}
+          />
+          <Num
+            label="检查间隔（分钟）"
+            value={cfg.serverUpdateIntervalMinutes ?? 360}
+            onChange={(v) => set("serverUpdateIntervalMinutes", v)}
+          />
+          <Field label="GitHub 仓库">
+            <Input
+              value={cfg.serverUpdateRepository ?? ""}
+              onChange={(e) => set("serverUpdateRepository", e.target.value)}
+            />
+          </Field>
+          <Field label="GH Proxy 前缀">
+            <Input
+              value={cfg.serverUpdateGhProxyPrefix ?? ""}
+              onChange={(e) => set("serverUpdateGhProxyPrefix", e.target.value)}
+            />
+          </Field>
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader title="客户端与更新" desc="白名单、代理和自动更新源" />
         <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Toggle label="只允许白名单客户端" checked={cfg.clientWhitelistOnly} onChange={(v) => set("clientWhitelistOnly", v)} />
-          <Toggle label="手动 IP 优先" checked={cfg.manualIpPriorityEnabled} onChange={(v) => set("manualIpPriorityEnabled", v)} />
-          <Toggle label="测速后自动清理 IP 池" checked={cfg.autoCleanupEnabled} onChange={(v) => set("autoCleanupEnabled", v)} />
-          <Toggle label="启用同运营商交叉测试" checked={!!cfg.crossTestEnabled} onChange={(v) => set("crossTestEnabled", v)} />
-          <Toggle label="启用客户端更新" checked={cfg.clientUpdateEnabled} onChange={(v) => set("clientUpdateEnabled", v)} />
+          <Toggle
+            label="只允许白名单客户端"
+            checked={cfg.clientWhitelistOnly}
+            onChange={(v) => set("clientWhitelistOnly", v)}
+          />
+          <Toggle
+            label="手动 IP 优先"
+            checked={cfg.manualIpPriorityEnabled}
+            onChange={(v) => set("manualIpPriorityEnabled", v)}
+          />
+          <Toggle
+            label="测速后自动清理 IP 池"
+            checked={cfg.autoCleanupEnabled}
+            onChange={(v) => set("autoCleanupEnabled", v)}
+          />
+          <Toggle
+            label="启用同运营商交叉测试"
+            checked={!!cfg.crossTestEnabled}
+            onChange={(v) => set("crossTestEnabled", v)}
+          />
+          <Toggle
+            label="启用客户端更新"
+            checked={cfg.clientUpdateEnabled}
+            onChange={(v) => set("clientUpdateEnabled", v)}
+          />
           <Field label="代理模式">
-            <Select value={cfg.clientProxyMode} onChange={(e) => set("clientProxyMode", e.target.value)}>
+            <Select
+              value={cfg.clientProxyMode}
+              onChange={(e) => set("clientProxyMode", e.target.value)}
+            >
               <option value="direct">direct</option>
               <option value="system">system</option>
               <option value="custom">custom</option>
             </Select>
           </Field>
-          <Field label="自定义代理"><Input value={cfg.clientProxyUrl} onChange={(e) => set("clientProxyUrl", e.target.value)} /></Field>
+          <Field label="自定义代理">
+            <Input
+              value={cfg.clientProxyUrl}
+              onChange={(e) => set("clientProxyUrl", e.target.value)}
+            />
+          </Field>
           <Field label="更新源类型">
-            <Select value={cfg.clientUpdateSourceType} onChange={(e) => set("clientUpdateSourceType", e.target.value)}>
+            <Select
+              value={cfg.clientUpdateSourceType}
+              onChange={(e) => set("clientUpdateSourceType", e.target.value)}
+            >
               <option value="github">github</option>
               <option value="local">local</option>
             </Select>
           </Field>
-          <Field label="最新版本"><Input value={cfg.latestClientVersion} onChange={(e) => set("latestClientVersion", e.target.value)} /></Field>
-          <Field label="GitHub 仓库"><Input value={cfg.clientUpdateRepository} onChange={(e) => set("clientUpdateRepository", e.target.value)} /></Field>
-          <Field label="Release Tag"><Input value={cfg.clientUpdateReleaseTag} onChange={(e) => set("clientUpdateReleaseTag", e.target.value)} /></Field>
-          <Field label="GH Proxy 前缀"><Input value={cfg.clientUpdateGhProxyPrefix} onChange={(e) => set("clientUpdateGhProxyPrefix", e.target.value)} /></Field>
+          <Field label="最新版本">
+            <Input
+              value={cfg.latestClientVersion}
+              onChange={(e) => set("latestClientVersion", e.target.value)}
+            />
+          </Field>
+          <Field label="GitHub 仓库">
+            <Input
+              value={cfg.clientUpdateRepository}
+              onChange={(e) => set("clientUpdateRepository", e.target.value)}
+            />
+          </Field>
+          <Field label="Release Tag">
+            <Input
+              value={cfg.clientUpdateReleaseTag}
+              onChange={(e) => set("clientUpdateReleaseTag", e.target.value)}
+            />
+          </Field>
+          <Field label="GH Proxy 前缀">
+            <Input
+              value={cfg.clientUpdateGhProxyPrefix}
+              onChange={(e) => set("clientUpdateGhProxyPrefix", e.target.value)}
+            />
+          </Field>
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="WebUI 安全" desc="用户名和密码请使用页面顶部的“修改密码”功能管理" />
+        <CardHeader
+          title="WebUI 安全"
+          desc="用户名和密码请使用页面顶部的“修改密码”功能管理"
+        />
         <CardBody>
-          <Toggle label="启用 WebUI 登录保护" checked={cfg.webUiAuth.enabled} onChange={(v) => set("webUiAuth", { ...cfg.webUiAuth, enabled: v })} />
+          <Toggle
+            label="启用 WebUI 登录保护"
+            checked={cfg.webUiAuth.enabled}
+            onChange={(v) => set("webUiAuth", { ...cfg.webUiAuth, enabled: v })}
+          />
         </CardBody>
       </Card>
-
     </div>
   );
 }
 
-function Num({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
-  return <Field label={label}><Input type="number" value={value ?? 0} onChange={(e) => onChange(Number(e.target.value))} /></Field>;
+function Num({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <Input
+        type="number"
+        value={value ?? 0}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </Field>
+  );
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return <div className="flex items-center justify-between rounded-xl border border-border bg-surface p-3"><span className="text-sm text-fg-muted">{label}</span><Switch checked={checked} onChange={onChange} /></div>;
+function Toggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-border bg-surface p-3">
+      <span className="text-sm text-fg-muted">{label}</span>
+      <Switch checked={checked} onChange={onChange} />
+    </div>
+  );
 }

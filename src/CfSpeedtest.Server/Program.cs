@@ -45,6 +45,8 @@ builder.Services.AddSingleton<DnsUpdateService>();
 builder.Services.AddSingleton<RoundCoordinatorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundCoordinatorService>());
 builder.Services.AddSingleton<ClientWsHub>();
+builder.Services.AddSingleton<WebhookNotificationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WebhookNotificationService>());
 builder.Services.AddSingleton<WebUiAuthService>();
 builder.Services.AddSingleton<ServerUpdateService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ServerUpdateService>());
@@ -129,7 +131,7 @@ app.UseStaticFiles(new StaticFileOptions
 // ============================================================
 //  API: 客户端注册
 // ============================================================
-app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store) =>
+app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store, WebhookNotificationService notifications) =>
 {
     var config = store.GetConfig();
     var clientId = req.ClientId;
@@ -166,6 +168,7 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
     };
     store.UpsertClient(info);
     store.MarkBootstrapTokenConsumedByClient(clientId);
+    notifications.ClientSeen(info);
 
     return ApiResponse<ClientRegisterResponse>.Ok(new ClientRegisterResponse
     {
@@ -183,7 +186,7 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store)
 // ============================================================
 //  API: 客户端心跳
 // ============================================================
-app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore store, RoundCoordinatorService rounds) =>
+app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore store, RoundCoordinatorService rounds, WebhookNotificationService notifications) =>
 {
     if (string.IsNullOrWhiteSpace(req.ClientId))
         return ApiResponse<ClientHeartbeatResponse>.Fail("ClientId is required");
@@ -220,6 +223,7 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
     client.IsOnline = true;
     store.UpsertClient(client);
     store.MarkBootstrapTokenConsumedByClient(client.ClientId);
+    notifications.ClientSeen(client);
 
     return ApiResponse<ClientHeartbeatResponse>.Ok(new ClientHeartbeatResponse
     {
@@ -235,7 +239,7 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
     });
 });
 
-app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoordinatorService rounds, ClientWsHub hub) =>
+app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoordinatorService rounds, ClientWsHub hub, WebhookNotificationService notifications) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
     {
@@ -259,6 +263,10 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
     hub.SetConnection(clientId, socket);
+    client.LastSeenAt = DateTime.UtcNow;
+    client.IsOnline = true;
+    store.UpsertClient(client);
+    notifications.ClientSeen(client);
 
     var hello = new ClientWsMessage
     {
@@ -285,17 +293,18 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
             if (msg is null) continue;
 
             client = store.GetClient(clientId) ?? client;
-    client.Version = string.IsNullOrWhiteSpace(msg.Version) ? client.Version : msg.Version;
-    client.Platform = string.IsNullOrWhiteSpace(msg.Platform) ? client.Platform : msg.Platform;
-    client.RuntimeStatus = string.IsNullOrWhiteSpace(msg.RuntimeStatus) ? client.RuntimeStatus : msg.RuntimeStatus;
+            client.Version = string.IsNullOrWhiteSpace(msg.Version) ? client.Version : msg.Version;
+            client.Platform = string.IsNullOrWhiteSpace(msg.Platform) ? client.Platform : msg.Platform;
+            client.RuntimeStatus = string.IsNullOrWhiteSpace(msg.RuntimeStatus) ? client.RuntimeStatus : msg.RuntimeStatus;
             client.CurrentTaskTotalIps = msg.CurrentTaskTotalIps;
             client.CurrentTaskTestedIps = msg.CurrentTaskTestedIps;
             client.CurrentTaskStartedAt = msg.CurrentTaskStartedAt;
             client.RuntimeLog = string.IsNullOrWhiteSpace(msg.RuntimeLog) ? client.RuntimeLog : msg.RuntimeLog;
             client.LastSeenAt = DateTime.UtcNow;
-    client.IsOnline = true;
-    store.UpsertClient(client);
-    store.MarkBootstrapTokenConsumedByClient(client.ClientId);
+            client.IsOnline = true;
+            store.UpsertClient(client);
+            store.MarkBootstrapTokenConsumedByClient(client.ClientId);
+            notifications.ClientSeen(client);
 
             var response = new ClientWsMessage
             {
@@ -940,6 +949,45 @@ app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 {
     store.SaveConfig(config);
     return ApiResponse<string>.Ok("Config saved");
+});
+
+app.MapGet("/api/notifications/config", (DataStore store) =>
+{
+    return ApiResponse<WebhookConfig>.Ok(store.GetConfig().Webhook);
+});
+
+app.MapPost("/api/notifications/config", (WebhookConfig config, DataStore store) =>
+{
+    if (config.Enabled && string.IsNullOrWhiteSpace(config.Url))
+        return ApiResponse<string>.Fail("启用 Webhook 时必须填写 URL");
+
+    if (!string.IsNullOrWhiteSpace(config.Url) &&
+        (!Uri.TryCreate(config.Url, UriKind.Absolute, out var uri) ||
+         (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)))
+        return ApiResponse<string>.Fail("Webhook URL 必须是有效的 HTTP 或 HTTPS 地址");
+
+    if (!WebhookNotificationService.TryValidateTemplate(config.BodyTemplate, out var templateError))
+        return ApiResponse<string>.Fail(templateError);
+    if (!WebhookNotificationService.TryNormalizeHeaders(config.Headers, out var headers, out var headerError))
+        return ApiResponse<string>.Fail(headerError);
+
+    config.Url = config.Url.Trim();
+    config.Headers = headers;
+    store.GetConfig().Webhook = config;
+    store.SaveConfig(store.GetConfig());
+    return ApiResponse<string>.Ok("Webhook 配置已保存");
+});
+
+app.MapPost("/api/notifications/test", async (WebhookNotificationService notifications, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return ApiResponse<string>.Ok(await notifications.SendTestAsync(cancellationToken));
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or TaskCanceledException or JsonException)
+    {
+        return ApiResponse<string>.Fail(ex is TaskCanceledException ? "Webhook 请求超时" : ex.Message);
+    }
 });
 
 app.MapPost("/api/server/update", (ServerUpdateService updates) =>
