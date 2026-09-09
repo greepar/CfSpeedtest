@@ -146,9 +146,6 @@ app.MapPost("/api/client/register", (ClientRegisterRequest req, DataStore store,
     var existing = store.GetClient(clientId);
     if (existing is null && config.ClientWhitelistOnly)
         return ApiResponse<ClientRegisterResponse>.Fail("ClientId is not in whitelist");
-    if (existing is not null && !existing.Allowed)
-        return ApiResponse<ClientRegisterResponse>.Fail("Client is not allowed to connect");
-
     var info = new ClientInfo
     {
         ClientId = clientId,
@@ -207,11 +204,6 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
             Allowed = true,
         };
     }
-    else if (!client.Allowed)
-    {
-        return ApiResponse<ClientHeartbeatResponse>.Fail("Client is not allowed to connect");
-    }
-
     client.Version = string.IsNullOrWhiteSpace(req.Version) ? client.Version : req.Version;
     client.Platform = string.IsNullOrWhiteSpace(req.Platform) ? client.Platform : req.Platform;
     client.RuntimeStatus = string.IsNullOrWhiteSpace(req.RuntimeStatus) ? client.RuntimeStatus : req.RuntimeStatus;
@@ -230,7 +222,7 @@ app.MapPost("/api/client/heartbeat", (ClientHeartbeatRequest req, DataStore stor
         Success = true,
         Message = "Heartbeat received",
         HeartbeatIntervalSeconds = config.HeartbeatIntervalSeconds,
-        ForceFetchTask = rounds.ConsumeImmediateTrigger(req.ClientId, client.Isp),
+        ForceFetchTask = client.Allowed && rounds.ConsumeImmediateTrigger(req.ClientId, client.Isp),
         ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(req.ClientId),
         EffectiveIsp = client.Isp,
         EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
@@ -255,7 +247,7 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
     }
 
     var client = store.GetClient(clientId);
-    if (client is null || !client.Allowed)
+    if (client is null)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         return;
@@ -311,7 +303,7 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
                 Type = "heartbeat-ack",
                 ClientId = clientId,
                 HeartbeatIntervalSeconds = store.GetConfig().HeartbeatIntervalSeconds,
-                ForceFetchTask = rounds.ConsumeImmediateTrigger(clientId, client.Isp),
+                ForceFetchTask = client.Allowed && rounds.ConsumeImmediateTrigger(clientId, client.Isp),
                 ForceCheckUpdate = rounds.ConsumeClientUpdateTrigger(clientId),
                 EffectiveIsp = client.Isp,
                 EffectiveName = client.Name ?? $"{client.Isp}-{client.ClientId[..6]}",
@@ -515,9 +507,6 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
         var existing = store.GetClient(req.ClientId.Trim());
         if (existing is null)
             return ApiResponse<BootstrapTokenCreateResponse>.Fail("ClientId not found");
-        if (!existing.Allowed)
-            return ApiResponse<BootstrapTokenCreateResponse>.Fail("Client is not allowed");
-
         clientId = existing.ClientId;
         // 编辑请求里若带了新的 name/isp，把数据库一起改了
         var newName = string.IsNullOrWhiteSpace(req.Name) ? existing.Name : req.Name.Trim();
@@ -687,9 +676,27 @@ app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataSto
         });
     }
 
-    if (!auth.ValidateLogin(store, req.Username, req.Password))
-        return ApiResponse<WebUiAuthStatus>.Fail("用户名或密码错误");
+    if (auth.IsLoginBlocked(store, http, out var retryAfter))
+    {
+        http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        http.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
+        return ApiResponse<WebUiAuthStatus>.Fail($"登录失败次数过多，请在 {Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes))} 分钟后重试");
+    }
 
+    if (!auth.ValidateLogin(store, req.Username, req.Password))
+    {
+        var remaining = auth.RecordFailedLogin(store, http, out retryAfter);
+        if (retryAfter > TimeSpan.Zero)
+        {
+            http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            http.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
+        }
+        return retryAfter > TimeSpan.Zero
+            ? ApiResponse<WebUiAuthStatus>.Fail($"登录失败次数过多，请在 {Math.Max(1, (int)Math.Ceiling(retryAfter.TotalMinutes))} 分钟后重试")
+            : ApiResponse<WebUiAuthStatus>.Fail($"用户名或密码错误，还可尝试 {remaining} 次");
+    }
+
+    auth.ClearLoginFailures(http);
     var token = auth.CreateSession(store, http, conf.Username);
     auth.SignIn(http, token);
     return ApiResponse<WebUiAuthStatus>.Ok(new WebUiAuthStatus
@@ -816,7 +823,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
     if (client is null)
         return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client not registered"), AppJsonContext.Default.ApiResponseSpeedTestTask);
     if (!client.Allowed)
-        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client is not allowed to connect"), AppJsonContext.Default.ApiResponseSpeedTestTask);
+        return Results.Json(ApiResponse<SpeedTestTask>.Fail("Client scheduling is disabled"), AppJsonContext.Default.ApiResponseSpeedTestTask);
 
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
@@ -878,9 +885,6 @@ app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, Round
     var client = store.GetClient(report.ClientId);
     if (client is null)
         return ApiResponse<string>.Fail("Client not registered");
-    if (!client.Allowed)
-        return ApiResponse<string>.Fail("Client is not allowed to connect");
-
     client.LastSeenAt = DateTime.UtcNow;
     client.RuntimeStatus = "已完成测速";
     client.CurrentTaskTestedIps = report.Results.Count;
@@ -921,7 +925,7 @@ app.MapPost("/api/task/additional", (AdditionalIpBatchRequest req, DataStore sto
     if (client is null)
         return ApiResponse<AdditionalIpBatchResponse>.Fail("Client not registered");
     if (!client.Allowed)
-        return ApiResponse<AdditionalIpBatchResponse>.Fail("Client is not allowed to connect");
+        return ApiResponse<AdditionalIpBatchResponse>.Ok(new AdditionalIpBatchResponse());
 
     client.LastSeenAt = DateTime.UtcNow;
     client.IsOnline = true;
@@ -947,6 +951,11 @@ app.MapGet("/api/config", (DataStore store) =>
 // ============================================================
 app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 {
+    if (config.WebUiAuth.MaxFailedLoginAttempts is < 1 or > 100)
+        return ApiResponse<string>.Fail("登录失败次数阈值必须在 1 到 100 之间");
+    if (config.WebUiAuth.LoginLockoutMinutes is < 1 or > 1440)
+        return ApiResponse<string>.Fail("登录限流时间必须在 1 到 1440 分钟之间");
+
     store.SaveConfig(config);
     return ApiResponse<string>.Ok("Config saved");
 });
@@ -1008,8 +1017,7 @@ app.MapGet("/api/clients", (DataStore store) =>
     var clients = store.GetClients();
     foreach (var client in clients)
     {
-        client.IsOnline = client.Allowed &&
-                          client.LastSeenAt != DateTime.MinValue &&
+        client.IsOnline = client.LastSeenAt != DateTime.MinValue &&
                           (now - client.LastSeenAt.ToUniversalTime()) <= onlineWindow;
     }
 
@@ -1062,13 +1070,13 @@ app.MapDelete("/api/clients/{clientId}", (string clientId, DataStore store) =>
 });
 
 // ============================================================
-//  API: WebUI - 设置客户端是否允许连接
+//  API: WebUI - 设置客户端是否参与测速调度
 // ============================================================
 app.MapPost("/api/clients/{clientId}/allow", (string clientId, bool allowed, DataStore store) =>
 {
     var updated = store.SetClientAllowed(clientId, allowed);
     return updated
-        ? ApiResponse<string>.Ok(allowed ? "Client allowed" : "Client blocked")
+        ? ApiResponse<string>.Ok(allowed ? "Client scheduling enabled" : "Client scheduling disabled")
         : ApiResponse<string>.Fail("Client not found");
 });
 
@@ -1123,10 +1131,13 @@ app.MapGet("/api/ippool", (DataStore store) =>
     {
         var manualIps = config.IpSources.TryGetValue(isp, out var source) ? source.ManualIps : [];
         var apiIps = store.GetApiIpPool(isp);
+        var cnameIps = store.GetCnameIpPool(isp);
         result[isp] = new IpPoolView
         {
             ManualIps = manualIps.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-            ApiIps = apiIps.Where(ip => !manualIps.Contains(ip, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+            ApiIps = apiIps.Where(ip => !manualIps.Contains(ip, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            CnameIps = cnameIps.Where(ip => !manualIps.Contains(ip, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            AllIps = manualIps.Concat(cnameIps).Concat(apiIps).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
         };
     }
     

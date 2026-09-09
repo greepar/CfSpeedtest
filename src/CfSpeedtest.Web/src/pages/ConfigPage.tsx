@@ -42,6 +42,8 @@ export function ConfigPage() {
     try {
       await api.post<string>("/api/config", cfg);
       toast("配置已保存", "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "配置保存失败", "error");
     } finally {
       setSaving(false);
     }
@@ -272,12 +274,43 @@ export function ConfigPage() {
           title="WebUI 安全"
           desc="用户名和密码请使用页面顶部的“修改密码”功能管理"
         />
-        <CardBody>
+        <CardBody className="grid gap-4 md:grid-cols-3">
           <Toggle
             label="启用 WebUI 登录保护"
             checked={cfg.webUiAuth.enabled}
             onChange={(v) => set("webUiAuth", { ...cfg.webUiAuth, enabled: v })}
           />
+          <Field
+            label="允许连续失败次数"
+            hint="同一来源 IP 达到该次数后临时禁止登录"
+          >
+            <Input
+              type="number"
+              min="1"
+              max="100"
+              value={cfg.webUiAuth.maxFailedLoginAttempts ?? 5}
+              onChange={(e) =>
+                set("webUiAuth", {
+                  ...cfg.webUiAuth,
+                  maxFailedLoginAttempts: Number(e.target.value),
+                })
+              }
+            />
+          </Field>
+          <Field label="限流时间（分钟）" hint="限流到期后允许重新尝试登录">
+            <Input
+              type="number"
+              min="1"
+              max="1440"
+              value={cfg.webUiAuth.loginLockoutMinutes ?? 15}
+              onChange={(e) =>
+                set("webUiAuth", {
+                  ...cfg.webUiAuth,
+                  loginLockoutMinutes: Number(e.target.value),
+                })
+              }
+            />
+          </Field>
         </CardBody>
       </Card>
     </div>

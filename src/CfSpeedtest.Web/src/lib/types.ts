@@ -57,6 +57,8 @@ export interface HistoryTimeSegment {
 export interface IpPoolView {
   manualIps: string[];
   apiIps: string[];
+  cnameIps: string[];
+  allIps: string[];
 }
 
 export type IpPoolMap = Record<string, IpPoolView>;
@@ -141,6 +143,8 @@ export interface WebUiAuthConfig {
   username: string;
   passwordHash: string;
   passwordSalt: string;
+  maxFailedLoginAttempts: number;
+  loginLockoutMinutes: number;
   sessions: unknown[];
 }
 

@@ -9,6 +9,7 @@ public class WebUiAuthService
 {
     private const string CookieName = "cfst_webui_session";
     private readonly ConcurrentDictionary<string, SessionInfo> _sessions = new();
+    private readonly ConcurrentDictionary<string, LoginFailureInfo> _loginFailures = new();
     private readonly TimeSpan _sessionLifetime = TimeSpan.FromDays(7);
     private readonly ILogger<WebUiAuthService> _logger;
 
@@ -70,6 +71,55 @@ public class WebUiAuthService
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(hashed),
             Encoding.UTF8.GetBytes(auth.PasswordHash));
+    }
+
+    public bool IsLoginBlocked(DataStore store, HttpContext context, out TimeSpan retryAfter)
+    {
+        var key = GetLoginFailureKey(context);
+        if (!_loginFailures.TryGetValue(key, out var failure) || failure.LockedUntilUtc is null)
+        {
+            retryAfter = TimeSpan.Zero;
+            return false;
+        }
+
+        retryAfter = failure.LockedUntilUtc.Value - DateTime.UtcNow;
+        if (retryAfter > TimeSpan.Zero)
+            return true;
+
+        _loginFailures.TryRemove(key, out _);
+        retryAfter = TimeSpan.Zero;
+        return false;
+    }
+
+    public int RecordFailedLogin(DataStore store, HttpContext context, out TimeSpan retryAfter)
+    {
+        var auth = store.GetConfig().WebUiAuth;
+        var maxAttempts = Math.Clamp(auth.MaxFailedLoginAttempts, 1, 100);
+        var lockout = TimeSpan.FromMinutes(Math.Clamp(auth.LoginLockoutMinutes, 1, 1440));
+        var key = GetLoginFailureKey(context);
+        var now = DateTime.UtcNow;
+        var failure = _loginFailures.AddOrUpdate(
+            key,
+            _ => new LoginFailureInfo(1, maxAttempts == 1 ? now.Add(lockout) : null),
+            (_, current) =>
+            {
+                if (current.LockedUntilUtc > now)
+                    return current;
+
+                var attempts = current.FailedAttempts + 1;
+                return new LoginFailureInfo(attempts, attempts >= maxAttempts ? now.Add(lockout) : null);
+            });
+
+        if (failure.LockedUntilUtc is not null)
+            _logger.LogWarning("WebUI login locked for {IpAddress} after {Attempts} failed attempts", key, failure.FailedAttempts);
+
+        retryAfter = failure.LockedUntilUtc is { } lockedUntil ? lockedUntil - now : TimeSpan.Zero;
+        return Math.Max(0, maxAttempts - failure.FailedAttempts);
+    }
+
+    public void ClearLoginFailures(HttpContext context)
+    {
+        _loginFailures.TryRemove(GetLoginFailureKey(context), out _);
     }
 
     public string CreateSession(DataStore store, HttpContext context, string username)
@@ -226,6 +276,11 @@ public class WebUiAuthService
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash);
     }
+
+    private static string GetLoginFailureKey(HttpContext context) =>
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    private sealed record LoginFailureInfo(int FailedAttempts, DateTime? LockedUntilUtc);
 
     private sealed class SessionInfo
     {

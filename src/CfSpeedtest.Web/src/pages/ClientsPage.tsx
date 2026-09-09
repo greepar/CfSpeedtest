@@ -1,10 +1,41 @@
 import { useEffect, useState } from "react";
-import { Copy, Edit3, FileText, Play, RefreshCw, Rocket, Trash2, UploadCloud } from "lucide-react";
+import {
+  Copy,
+  Edit3,
+  FileText,
+  Play,
+  RefreshCw,
+  Rocket,
+  Trash2,
+  UploadCloud,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { formatDateTime, timeAgo } from "@/lib/format";
 import { ISP_KEYS, ispBadgeTone, ispKey, ispLabel } from "@/lib/isp";
-import type { BootstrapTokenCreateResponse, BootstrapTokenStatus, ClientInfo, ClientInstallScriptResponse, IspKey } from "@/lib/types";
-import { Badge, Button, Card, CardBody, CardHeader, CodeBox, Empty, Field, Input, Modal, Progress, Select, Switch, Textarea, useToast } from "@/components/ui";
+import type {
+  BootstrapTokenCreateResponse,
+  BootstrapTokenStatus,
+  ClientInfo,
+  ClientInstallScriptResponse,
+  IspKey,
+} from "@/lib/types";
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CodeBox,
+  Empty,
+  Field,
+  Input,
+  Modal,
+  Progress,
+  Select,
+  Switch,
+  Textarea,
+  useToast,
+} from "@/components/ui";
 
 export function ClientsPage() {
   const toast = useToast();
@@ -18,7 +49,7 @@ export function ClientsPage() {
   async function load(showLoading = false) {
     if (showLoading || items.length === 0) setLoading(true);
     try {
-      setItems(await api.get<ClientInfo[]>("/api/clients") ?? []);
+      setItems((await api.get<ClientInfo[]>("/api/clients")) ?? []);
     } finally {
       setLoading(false);
     }
@@ -44,29 +75,185 @@ export function ClientsPage() {
           desc="管理节点、触发测速/更新，以及生成一键部署命令"
           action={
             <>
-              <Button variant="secondary" onClick={() => load(true)}><RefreshCw className="h-4 w-4" />刷新</Button>
-              <Button onClick={() => setDeploy({ clientId: "", isp: 0, name: "", isOnline: false, allowed: true, registeredAt: "", lastSeenAt: "", currentTaskTestedIps: 0, currentTaskTotalIps: 0 })}><Rocket className="h-4 w-4" />一键部署</Button>
+              <Button variant="secondary" onClick={() => load(true)}>
+                <RefreshCw className="h-4 w-4" />
+                刷新
+              </Button>
+              <Button
+                onClick={() =>
+                  setDeploy({
+                    clientId: "",
+                    isp: 0,
+                    name: "",
+                    isOnline: false,
+                    allowed: true,
+                    registeredAt: "",
+                    lastSeenAt: "",
+                    currentTaskTestedIps: 0,
+                    currentTaskTotalIps: 0,
+                  })
+                }
+              >
+                <Rocket className="h-4 w-4" />
+                一键部署
+              </Button>
             </>
           }
         />
         <CardBody>
-          {loading && !items.length ? <div className="py-8 text-center text-sm text-fg-muted">加载中...</div> : !items.length ? <Empty title="暂无客户端" desc="点击一键部署创建第一个节点" /> : (
+          {loading && !items.length ? (
+            <div className="py-8 text-center text-sm text-fg-muted">
+              加载中...
+            </div>
+          ) : !items.length ? (
+            <Empty title="暂无客户端" desc="点击一键部署创建第一个节点" />
+          ) : (
             <div className="overflow-auto">
               <table className="w-full min-w-[980px] text-sm">
-                <thead className="text-left text-xs text-fg-subtle"><tr><th className="pb-3">节点</th><th>状态</th><th>运行</th><th>任务</th><th>版本/平台</th><th>最后心跳</th><th className="text-right">操作</th></tr></thead>
+                <thead className="text-left text-xs text-fg-subtle">
+                  <tr>
+                    <th className="pb-3">节点</th>
+                    <th>状态</th>
+                    <th>运行</th>
+                    <th>任务</th>
+                    <th>版本/平台</th>
+                    <th>最后心跳</th>
+                    <th className="text-right">操作</th>
+                  </tr>
+                </thead>
                 <tbody className="divide-y divide-border">
                   {items.map((c) => {
-                    const pct = c.currentTaskTotalIps ? c.currentTaskTestedIps / c.currentTaskTotalIps * 100 : 0;
+                    const pct = c.currentTaskTotalIps
+                      ? (c.currentTaskTestedIps / c.currentTaskTotalIps) * 100
+                      : 0;
                     const online = isClientOnline(c);
                     return (
                       <tr key={c.clientId}>
-                        <td className="py-3"><div className="font-medium text-fg">{c.name || c.clientId.slice(0, 8)}</div><div className="mt-1 flex items-center gap-2"><Badge tone={ispBadgeTone(c.isp)}>{ispLabel(c.isp)}</Badge><span className="font-mono text-xs text-fg-subtle">{c.clientId}</span></div></td>
-                        <td><div className="flex items-center gap-2"><Badge tone={online ? "success" : "danger"}>{online ? "在线" : "离线"}</Badge><Switch checked={c.allowed} onChange={(v) => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/allow`, undefined, { allowed: v }), v ? "已允许连接" : "已禁用连接")} /></div></td>
-                        <td className="max-w-48 truncate text-fg-muted">{c.runtimeStatus || "-"}</td>
-                        <td className="w-44"><Progress value={pct} /><div className="mt-1 text-xs text-fg-subtle">{c.currentTaskTestedIps}/{c.currentTaskTotalIps}</div></td>
-                        <td><div>{c.version || "-"}</div><div className="text-xs text-fg-subtle">{c.platform || "-"}</div></td>
-                        <td><div>{timeAgo(c.lastSeenAt)}</div><div className="text-xs text-fg-subtle">{formatDateTime(c.lastSeenAt)}</div></td>
-                         <td><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" title="日志" onClick={() => setLogClient(c)}><FileText className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="编辑" onClick={() => setEdit(c)}><Edit3 className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="测速" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-test`), "已触发测速")}><Play className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="更新" onClick={() => doIt(() => api.post<string>(`/api/clients/${encodeURIComponent(c.clientId)}/trigger-update`), "已触发更新检查")}><UploadCloud className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="部署命令" onClick={() => setDeploy(c)}><Rocket className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="卸载客户端" onClick={() => setUninstall(c)}><Trash2 className="h-4 w-4 text-danger" /></Button></div></td>
+                        <td className="py-3">
+                          <div className="font-medium text-fg">
+                            {c.name || c.clientId.slice(0, 8)}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2">
+                            <Badge tone={ispBadgeTone(c.isp)}>
+                              {ispLabel(c.isp)}
+                            </Badge>
+                            <span className="font-mono text-xs text-fg-subtle">
+                              {c.clientId}
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-2">
+                            <Badge tone={online ? "success" : "danger"}>
+                              {online ? "在线" : "离线"}
+                            </Badge>
+                            <Switch
+                              checked={c.allowed}
+                              onChange={(v) =>
+                                doIt(
+                                  () =>
+                                    api.post<string>(
+                                      `/api/clients/${encodeURIComponent(c.clientId)}/allow`,
+                                      undefined,
+                                      { allowed: v },
+                                    ),
+                                  v
+                                    ? "已启用测速调度"
+                                    : "已暂停测速调度，客户端将保持连接",
+                                )
+                              }
+                            />
+                          </div>
+                        </td>
+                        <td className="max-w-48 truncate text-fg-muted">
+                          {c.runtimeStatus || "-"}
+                        </td>
+                        <td className="w-44">
+                          <Progress value={pct} />
+                          <div className="mt-1 text-xs text-fg-subtle">
+                            {c.currentTaskTestedIps}/{c.currentTaskTotalIps}
+                          </div>
+                        </td>
+                        <td>
+                          <div>{c.version || "-"}</div>
+                          <div className="text-xs text-fg-subtle">
+                            {c.platform || "-"}
+                          </div>
+                        </td>
+                        <td>
+                          <div>{timeAgo(c.lastSeenAt)}</div>
+                          <div className="text-xs text-fg-subtle">
+                            {formatDateTime(c.lastSeenAt)}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="日志"
+                              onClick={() => setLogClient(c)}
+                            >
+                              <FileText className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="编辑"
+                              onClick={() => setEdit(c)}
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="测速"
+                              onClick={() =>
+                                doIt(
+                                  () =>
+                                    api.post<string>(
+                                      `/api/clients/${encodeURIComponent(c.clientId)}/trigger-test`,
+                                    ),
+                                  "已触发测速",
+                                )
+                              }
+                            >
+                              <Play className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="更新"
+                              onClick={() =>
+                                doIt(
+                                  () =>
+                                    api.post<string>(
+                                      `/api/clients/${encodeURIComponent(c.clientId)}/trigger-update`,
+                                    ),
+                                  "已触发更新检查",
+                                )
+                              }
+                            >
+                              <UploadCloud className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="部署命令"
+                              onClick={() => setDeploy(c)}
+                            >
+                              <Rocket className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="卸载客户端"
+                              onClick={() => setUninstall(c)}
+                            >
+                              <Trash2 className="h-4 w-4 text-danger" />
+                            </Button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
@@ -76,60 +263,441 @@ export function ClientsPage() {
           )}
         </CardBody>
       </Card>
-      <EditModal client={edit} onClose={() => setEdit(null)} onSaved={() => load(false)} />
-      <DeployModal client={deploy} onClose={() => setDeploy(null)} onChanged={() => load(false)} />
-      <UninstallModal client={uninstall} onClose={() => setUninstall(null)} onDeleted={() => load(false)} />
+      <EditModal
+        client={edit}
+        onClose={() => setEdit(null)}
+        onSaved={() => load(false)}
+      />
+      <DeployModal
+        client={deploy}
+        onClose={() => setDeploy(null)}
+        onChanged={() => load(false)}
+      />
+      <UninstallModal
+        client={uninstall}
+        onClose={() => setUninstall(null)}
+        onDeleted={() => load(false)}
+      />
       <ClientLogModal client={logClient} onClose={() => setLogClient(null)} />
     </div>
   );
 }
 
 function isClientOnline(client: ClientInfo): boolean {
-  return client.allowed && client.isOnline;
+  return client.isOnline;
 }
 
-function EditModal({ client, onClose, onSaved }: { client: ClientInfo | null; onClose: () => void; onSaved: () => Promise<void> }) {
-  const toast = useToast(); const [name, setName] = useState(""); const [isp, setIsp] = useState<IspKey>("Telecom");
-  useEffect(() => { if (client) { setName(client.name || ""); setIsp(ispKey(client.isp)); } }, [client]);
-  async function save() { if (!client) return; await api.post<string>(`/api/clients/${encodeURIComponent(client.clientId)}/metadata`, { name, isp }); toast("客户端信息已更新", "success"); onClose(); await onSaved(); }
-  return <Modal open={!!client} title="编辑客户端" onClose={onClose} footer={<><Button variant="secondary" onClick={onClose}>取消</Button><Button onClick={save}>保存</Button></>}><div className="grid gap-4"><Field label="客户端名称"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field><Field label="运营商"><Select value={isp} onChange={(e) => setIsp(e.target.value as IspKey)}>{ISP_KEYS.map((k) => <option key={k} value={k}>{ispLabel(k)}</option>)}</Select></Field></div></Modal>;
-}
-
-function ClientLogModal({ client, onClose }: { client: ClientInfo | null; onClose: () => void }) {
-  const log = client?.runtimeLog?.trim();
-  return <Modal open={!!client} title="客户端日志" onClose={onClose} maxWidth="max-w-4xl"><div className="space-y-3"><div className="grid gap-2 text-sm sm:grid-cols-2"><div><span className="text-fg-subtle">节点：</span>{client?.name || client?.clientId.slice(0, 8)}</div><div><span className="text-fg-subtle">运行：</span>{client?.runtimeStatus || "-"}</div><div><span className="text-fg-subtle">最后心跳：</span>{client?.lastSeenAt ? formatDateTime(client.lastSeenAt) : "-"}</div><div><span className="text-fg-subtle">版本：</span>{client?.version || "-"} / {client?.platform || "-"}</div></div>{log ? <Textarea readOnly value={log} className="min-h-[360px] font-mono text-xs" /> : <Empty title="暂无日志" desc="客户端下次心跳后会同步最近运行日志" />}</div></Modal>;
-}
-
-function UninstallModal({ client, onClose, onDeleted }: { client: ClientInfo | null; onClose: () => void; onDeleted: () => Promise<void> }) {
+function EditModal({
+  client,
+  onClose,
+  onSaved,
+}: {
+  client: ClientInfo | null;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
   const toast = useToast();
-  const [commands, setCommands] = useState<{ linux: string; macos: string; windows: string } | null>(null);
+  const [name, setName] = useState("");
+  const [isp, setIsp] = useState<IspKey>("Telecom");
+  useEffect(() => {
+    if (client) {
+      setName(client.name || "");
+      setIsp(ispKey(client.isp));
+    }
+  }, [client]);
+  async function save() {
+    if (!client) return;
+    await api.post<string>(
+      `/api/clients/${encodeURIComponent(client.clientId)}/metadata`,
+      { name, isp },
+    );
+    toast("客户端信息已更新", "success");
+    onClose();
+    await onSaved();
+  }
+  return (
+    <Modal
+      open={!!client}
+      title="编辑客户端"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            取消
+          </Button>
+          <Button onClick={save}>保存</Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <Field label="客户端名称">
+          <Input value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="运营商">
+          <Select
+            value={isp}
+            onChange={(e) => setIsp(e.target.value as IspKey)}
+          >
+            {ISP_KEYS.map((k) => (
+              <option key={k} value={k}>
+                {ispLabel(k)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function ClientLogModal({
+  client,
+  onClose,
+}: {
+  client: ClientInfo | null;
+  onClose: () => void;
+}) {
+  const log = client?.runtimeLog?.trim();
+  return (
+    <Modal
+      open={!!client}
+      title="客户端日志"
+      onClose={onClose}
+      maxWidth="max-w-4xl"
+    >
+      <div className="space-y-3">
+        <div className="grid gap-2 text-sm sm:grid-cols-2">
+          <div>
+            <span className="text-fg-subtle">节点：</span>
+            {client?.name || client?.clientId.slice(0, 8)}
+          </div>
+          <div>
+            <span className="text-fg-subtle">运行：</span>
+            {client?.runtimeStatus || "-"}
+          </div>
+          <div>
+            <span className="text-fg-subtle">最后心跳：</span>
+            {client?.lastSeenAt ? formatDateTime(client.lastSeenAt) : "-"}
+          </div>
+          <div>
+            <span className="text-fg-subtle">版本：</span>
+            {client?.version || "-"} / {client?.platform || "-"}
+          </div>
+        </div>
+        {log ? (
+          <Textarea
+            readOnly
+            value={log}
+            className="min-h-[360px] font-mono text-xs"
+          />
+        ) : (
+          <Empty title="暂无日志" desc="客户端下次心跳后会同步最近运行日志" />
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function UninstallModal({
+  client,
+  onClose,
+  onDeleted,
+}: {
+  client: ClientInfo | null;
+  onClose: () => void;
+  onDeleted: () => Promise<void>;
+}) {
+  const toast = useToast();
+  const [commands, setCommands] = useState<{
+    linux: string;
+    macos: string;
+    windows: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
-  useEffect(() => { setCommands(null); }, [client]);
+  useEffect(() => {
+    setCommands(null);
+  }, [client]);
   async function loadCommands() {
     if (!client?.clientId) return;
     setLoading(true);
     try {
-      const request = (platform: "linux" | "macos" | "windows") => api.post<ClientInstallScriptResponse>("/api/client/install-script", { platform, scriptType: "uninstall", clientId: client.clientId });
-      const [linux, macos, windows] = await Promise.all([request("linux"), request("macos"), request("windows")]);
-      setCommands({ linux: linux.script, macos: macos.script, windows: windows.script });
-    } finally { setLoading(false); }
+      const request = (platform: "linux" | "macos" | "windows") =>
+        api.post<ClientInstallScriptResponse>("/api/client/install-script", {
+          platform,
+          scriptType: "uninstall",
+          clientId: client.clientId,
+        });
+      const [linux, macos, windows] = await Promise.all([
+        request("linux"),
+        request("macos"),
+        request("windows"),
+      ]);
+      setCommands({
+        linux: linux.script,
+        macos: macos.script,
+        windows: windows.script,
+      });
+    } finally {
+      setLoading(false);
+    }
   }
-  async function copy(value: string) { await navigator.clipboard.writeText(value); toast("已复制命令", "success"); }
-  async function deleteRecord() { if (!client) return; if (!confirm("确定删除该客户端记录？")) return; await api.del<string>(`/api/clients/${encodeURIComponent(client.clientId)}`); toast("客户端已删除", "success"); onClose(); await onDeleted(); }
-  return <Modal open={!!client} title="卸载客户端" onClose={onClose} maxWidth="max-w-3xl" footer={<><Button variant="secondary" onClick={onClose}>关闭</Button><Button variant="danger" onClick={deleteRecord}>删除客户端记录</Button></>}><div className="space-y-4"><div className="text-sm text-fg-muted">节点：{client?.name || client?.clientId.slice(0, 8)}</div><Button onClick={loadCommands} disabled={loading}>{loading ? "获取中..." : "获取卸载命令"}</Button>{commands && <div className="space-y-3"><CommandBlock title="Linux Bash" value={commands.linux} onCopy={() => copy(commands.linux)} /><CommandBlock title="macOS Bash" value={commands.macos} onCopy={() => copy(commands.macos)} /><CommandBlock title="Windows PowerShell" value={commands.windows} onCopy={() => copy(commands.windows)} /></div>}</div></Modal>;
+  async function copy(value: string) {
+    await navigator.clipboard.writeText(value);
+    toast("已复制命令", "success");
+  }
+  async function deleteRecord() {
+    if (!client) return;
+    if (!confirm("确定删除该客户端记录？")) return;
+    await api.del<string>(
+      `/api/clients/${encodeURIComponent(client.clientId)}`,
+    );
+    toast("客户端已删除", "success");
+    onClose();
+    await onDeleted();
+  }
+  return (
+    <Modal
+      open={!!client}
+      title="卸载客户端"
+      onClose={onClose}
+      maxWidth="max-w-3xl"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            关闭
+          </Button>
+          <Button variant="danger" onClick={deleteRecord}>
+            删除客户端记录
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="text-sm text-fg-muted">
+          节点：{client?.name || client?.clientId.slice(0, 8)}
+        </div>
+        <Button onClick={loadCommands} disabled={loading}>
+          {loading ? "获取中..." : "获取卸载命令"}
+        </Button>
+        {commands && (
+          <div className="space-y-3">
+            <CommandBlock
+              title="Linux Bash"
+              value={commands.linux}
+              onCopy={() => copy(commands.linux)}
+            />
+            <CommandBlock
+              title="macOS Bash"
+              value={commands.macos}
+              onCopy={() => copy(commands.macos)}
+            />
+            <CommandBlock
+              title="Windows PowerShell"
+              value={commands.windows}
+              onCopy={() => copy(commands.windows)}
+            />
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
 }
 
-function CommandBlock({ title, value, onCopy }: { title: string; value: string; onCopy: () => void }) {
-  return <div><div className="mb-2 flex items-center justify-between text-sm font-medium">{title}<Button variant="ghost" size="sm" onClick={onCopy}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={value} /></div>;
+function CommandBlock({
+  title,
+  value,
+  onCopy,
+}: {
+  title: string;
+  value: string;
+  onCopy: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between text-sm font-medium">
+        {title}
+        <Button variant="ghost" size="sm" onClick={onCopy}>
+          <Copy className="h-4 w-4" />
+          复制
+        </Button>
+      </div>
+      <CodeBox value={value} />
+    </div>
+  );
 }
 
-function DeployModal({ client, onClose, onChanged }: { client: ClientInfo | null; onClose: () => void; onChanged: () => Promise<void> }) {
-  const toast = useToast(); const [name, setName] = useState(""); const [isp, setIsp] = useState<IspKey>("Telecom"); const [serverUrl, setServerUrl] = useState(location.origin); const [includeProxy, setIncludeProxy] = useState(true); const [disableAutoUpdate, setDisableAutoUpdate] = useState(false); const [res, setRes] = useState<BootstrapTokenCreateResponse | null>(null); const [status, setStatus] = useState<BootstrapTokenStatus | null>(null);
-  useEffect(() => { if (client) { setName(client.name || ""); setIsp(ispKey(client.isp)); setRes(null); setStatus(null); } }, [client]);
-  useEffect(() => { if (!res) return; const poll = () => api.get<BootstrapTokenStatus>(`/api/bootstrap/${encodeURIComponent(res.token)}/status`, undefined, true).then((s) => { setStatus(s); if (s.consumed || s.online) onChanged().catch(() => {}); }).catch(() => {}); poll(); const t = setInterval(poll, 2500); return () => clearInterval(t); }, [res]);
-  async function create() { const r = await api.post<BootstrapTokenCreateResponse>("/api/bootstrap/create", { name, isp, serverUrl, includeProxy, disableAutoUpdate, clientId: client?.clientId || undefined }); setRes(r); toast("部署命令已生成", "success"); await onChanged(); }
-  async function copy(v: string) { await navigator.clipboard.writeText(v); toast("已复制命令", "success"); }
-  const stateTone = status?.online ? "success" : status?.consumed ? "primary" : status?.expired ? "danger" : "warning";
-  const stateText = status?.online ? "已上线" : status?.consumed ? "已添加" : status?.expired ? "已过期" : "等待上线";
-  return <Modal open={!!client} title="一键部署客户端" onClose={onClose} maxWidth="max-w-3xl"><div className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><Field label="客户端名称"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="留空自动生成" /></Field><Field label="运营商"><Select value={isp} onChange={(e) => setIsp(e.target.value as IspKey)}>{ISP_KEYS.map((k) => <option key={k} value={k}>{ispLabel(k)}</option>)}</Select></Field><Field label="服务端地址"><Input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} /></Field><div className="grid gap-3 text-sm"><label className="flex items-center justify-between rounded-lg border border-border p-3">携带 GH Proxy<Switch checked={includeProxy} onChange={setIncludeProxy} /></label><label className="flex items-center justify-between rounded-lg border border-border p-3">禁用自动更新<Switch checked={disableAutoUpdate} onChange={setDisableAutoUpdate} /></label></div></div><Button onClick={create}><Rocket className="h-4 w-4" />生成命令</Button>{res && <div className="space-y-3 rounded-xl border border-border bg-surface p-4"><div className="flex flex-wrap gap-2 text-sm"><Badge tone="primary">Token {res.token}</Badge><Badge tone={stateTone}>{stateText}</Badge><span className="text-fg-muted">过期时间：{formatDateTime(res.expiresAtUtc)}</span></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Linux / macOS<Button variant="ghost" size="sm" onClick={() => copy(res.linuxCommand)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={res.linuxCommand} /></div><div><div className="mb-2 flex items-center justify-between text-sm font-medium">Windows PowerShell<Button variant="ghost" size="sm" onClick={() => copy(res.windowsCommand)}><Copy className="h-4 w-4" />复制</Button></div><CodeBox value={res.windowsCommand} /></div>{status?.runtimeStatus && <Textarea readOnly value={status.runtimeStatus} />}</div>}</div></Modal>;
+function DeployModal({
+  client,
+  onClose,
+  onChanged,
+}: {
+  client: ClientInfo | null;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const [isp, setIsp] = useState<IspKey>("Telecom");
+  const [serverUrl, setServerUrl] = useState(location.origin);
+  const [includeProxy, setIncludeProxy] = useState(true);
+  const [disableAutoUpdate, setDisableAutoUpdate] = useState(false);
+  const [res, setRes] = useState<BootstrapTokenCreateResponse | null>(null);
+  const [status, setStatus] = useState<BootstrapTokenStatus | null>(null);
+  useEffect(() => {
+    if (client) {
+      setName(client.name || "");
+      setIsp(ispKey(client.isp));
+      setRes(null);
+      setStatus(null);
+    }
+  }, [client]);
+  useEffect(() => {
+    if (!res) return;
+    const poll = () =>
+      api
+        .get<BootstrapTokenStatus>(
+          `/api/bootstrap/${encodeURIComponent(res.token)}/status`,
+          undefined,
+          true,
+        )
+        .then((s) => {
+          setStatus(s);
+          if (s.consumed || s.online) onChanged().catch(() => {});
+        })
+        .catch(() => {});
+    poll();
+    const t = setInterval(poll, 2500);
+    return () => clearInterval(t);
+  }, [res]);
+  async function create() {
+    const r = await api.post<BootstrapTokenCreateResponse>(
+      "/api/bootstrap/create",
+      {
+        name,
+        isp,
+        serverUrl,
+        includeProxy,
+        disableAutoUpdate,
+        clientId: client?.clientId || undefined,
+      },
+    );
+    setRes(r);
+    toast("部署命令已生成", "success");
+    await onChanged();
+  }
+  async function copy(v: string) {
+    await navigator.clipboard.writeText(v);
+    toast("已复制命令", "success");
+  }
+  const stateTone = status?.online
+    ? "success"
+    : status?.consumed
+      ? "primary"
+      : status?.expired
+        ? "danger"
+        : "warning";
+  const stateText = status?.online
+    ? "已上线"
+    : status?.consumed
+      ? "已添加"
+      : status?.expired
+        ? "已过期"
+        : "等待上线";
+  return (
+    <Modal
+      open={!!client}
+      title="一键部署客户端"
+      onClose={onClose}
+      maxWidth="max-w-3xl"
+    >
+      <div className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="客户端名称">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="留空自动生成"
+            />
+          </Field>
+          <Field label="运营商">
+            <Select
+              value={isp}
+              onChange={(e) => setIsp(e.target.value as IspKey)}
+            >
+              {ISP_KEYS.map((k) => (
+                <option key={k} value={k}>
+                  {ispLabel(k)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="服务端地址">
+            <Input
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+            />
+          </Field>
+          <div className="grid gap-3 text-sm">
+            <label className="flex items-center justify-between rounded-lg border border-border p-3">
+              携带 GH Proxy
+              <Switch checked={includeProxy} onChange={setIncludeProxy} />
+            </label>
+            <label className="flex items-center justify-between rounded-lg border border-border p-3">
+              禁用自动更新
+              <Switch
+                checked={disableAutoUpdate}
+                onChange={setDisableAutoUpdate}
+              />
+            </label>
+          </div>
+        </div>
+        <Button onClick={create}>
+          <Rocket className="h-4 w-4" />
+          生成命令
+        </Button>
+        {res && (
+          <div className="space-y-3 rounded-xl border border-border bg-surface p-4">
+            <div className="flex flex-wrap gap-2 text-sm">
+              <Badge tone="primary">Token {res.token}</Badge>
+              <Badge tone={stateTone}>{stateText}</Badge>
+              <span className="text-fg-muted">
+                过期时间：{formatDateTime(res.expiresAtUtc)}
+              </span>
+            </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between text-sm font-medium">
+                Linux / macOS
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => copy(res.linuxCommand)}
+                >
+                  <Copy className="h-4 w-4" />
+                  复制
+                </Button>
+              </div>
+              <CodeBox value={res.linuxCommand} />
+            </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between text-sm font-medium">
+                Windows PowerShell
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => copy(res.windowsCommand)}
+                >
+                  <Copy className="h-4 w-4" />
+                  复制
+                </Button>
+              </div>
+              <CodeBox value={res.windowsCommand} />
+            </div>
+            {status?.runtimeStatus && (
+              <Textarea readOnly value={status.runtimeStatus} />
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
 }

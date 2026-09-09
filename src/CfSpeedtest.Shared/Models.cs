@@ -295,6 +295,8 @@ public class WebUiAuthConfig
     public string Username { get; set; } = "admin";
     public string PasswordHash { get; set; } = string.Empty;
     public string PasswordSalt { get; set; } = string.Empty;
+    public int MaxFailedLoginAttempts { get; set; } = 5;
+    public int LoginLockoutMinutes { get; set; } = 15;
     public List<WebUiSessionInfo> Sessions { get; set; } = [];
 }
 
@@ -589,6 +591,8 @@ public class IpPoolView
 {
     public List<string> ManualIps { get; set; } = [];
     public List<string> ApiIps { get; set; } = [];
+    public List<string> CnameIps { get; set; } = [];
+    public List<string> AllIps { get; set; } = [];
 }
 
 /// <summary>

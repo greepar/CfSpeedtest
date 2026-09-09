@@ -60,44 +60,38 @@ public class IpPoolService : BackgroundService
 
             try
             {
-                var ips = new List<string>();
-
                 foreach (var source in sourceConfig.FetchSources)
                 {
                     if (string.IsNullOrWhiteSpace(source.Value)) continue;
 
                     var fetched = await FetchIpsFromSourceAsync(source);
-                    ips.AddRange(fetched);
-                }
-
-                if (ips.Count > 0)
-                {
+                    if (fetched.Count == 0) continue;
                     if (config.AutoCleanupEnabled)
                     {
                         var manualIps = sourceConfig.ManualIps ?? [];
-                        var existingApiIps = _store.GetApiIpPool(isp);
+                        var existingApiIps = _store.GetFetchedIpPool(isp);
                         var existingAll = manualIps.Concat(existingApiIps).ToHashSet();
                         // Keep enough IPs for the initial batch plus fallback pulls up to the configured max test count.
                         var targetPoolSize = Math.Max(Math.Max(config.BatchSize * 2, config.MaxTestIpCount), config.TopN);
                         var needCount = Math.Max(0, targetPoolSize - existingAll.Count);
-                        var refillIps = ips.Where(ip => !existingAll.Contains(ip)).Take(needCount).ToList();
+                        var refillIps = fetched.Where(ip => !existingAll.Contains(ip)).Take(needCount).ToList();
 
                         if (refillIps.Count > 0)
                         {
-                            _store.MergeApiIps(isp, refillIps);
+                            _store.MergeFetchedIps(isp, refillIps, source.Type);
                         }
 
                         _logger.LogInformation(
                             "Fetched {FetchedCount} IPs for {Isp}; auto-cleanup enabled, refilled {AddedCount} IPs to target pool size {TargetPoolSize}",
-                            ips.Count,
+                            fetched.Count,
                             isp,
                             refillIps.Count,
                             targetPoolSize);
                     }
                     else
                     {
-                        _store.MergeApiIps(isp, ips);
-                        _logger.LogInformation("Fetched {Count} IPs for {Isp} from API & DoH", ips.Count, isp);
+                        _store.MergeFetchedIps(isp, fetched, source.Type);
+                        _logger.LogInformation("Fetched {Count} IPs for {Isp} from {SourceType}", fetched.Count, isp, source.Type);
                     }
                 }
             }
@@ -195,7 +189,7 @@ public class IpPoolService : BackgroundService
     {
         var config = _store.GetConfig();
         var manualIps = config.IpSources.TryGetValue(isp, out var source) ? source.ManualIps : [];
-        var apiIps = _store.GetApiIpPool(isp);
+        var apiIps = _store.GetFetchedIpPool(isp);
         var excludeSet = excludeIps.Select(ip => ip.Trim()).Where(ip => !string.IsNullOrWhiteSpace(ip)).ToHashSet();
 
         var filteredManualIps = manualIps

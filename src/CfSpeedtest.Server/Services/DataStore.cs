@@ -26,6 +26,12 @@ public class DataStore
         ["Unicom"] = [],
         ["Mobile"] = []
     };
+    private Dictionary<string, List<string>> _cnameIpPools = new()
+    {
+        ["Telecom"] = [],
+        ["Unicom"] = [],
+        ["Mobile"] = []
+    };
 
     public DataStore(ILogger<DataStore> logger, IConfiguration configuration)
     {
@@ -61,21 +67,42 @@ public class DataStore
         lock (_lock) return _apiIpPools.TryGetValue(isp, out var pool) ? [.. pool] : [];
     }
 
-    public void MergeApiIps(string isp, IEnumerable<string> ips)
+    public List<string> GetCnameIpPool(string isp)
+    {
+        lock (_lock) return _cnameIpPools.TryGetValue(isp, out var pool) ? [.. pool] : [];
+    }
+
+    public List<string> GetFetchedIpPool(string isp)
     {
         lock (_lock)
         {
-            if (!_apiIpPools.ContainsKey(isp)) _apiIpPools[isp] = [];
-            
-            var set = new HashSet<string>(_apiIpPools[isp]);
+            var apiIps = _apiIpPools.TryGetValue(isp, out var apiPool) ? apiPool : [];
+            var cnameIps = _cnameIpPools.TryGetValue(isp, out var cnamePool) ? cnamePool : [];
+            return apiIps.Concat(cnameIps).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
+
+    public void MergeApiIps(string isp, IEnumerable<string> ips)
+    {
+        MergeFetchedIps(isp, ips, FetchSourceType.Api);
+    }
+
+    public void MergeFetchedIps(string isp, IEnumerable<string> ips, FetchSourceType sourceType)
+    {
+        lock (_lock)
+        {
+            var pools = sourceType == FetchSourceType.Cname ? _cnameIpPools : _apiIpPools;
+            if (!pools.ContainsKey(isp)) pools[isp] = [];
+
+            var set = new HashSet<string>(pools[isp], StringComparer.OrdinalIgnoreCase);
             foreach (var ip in ips)
             {
                 var trimmed = ip.Trim();
                 if (!string.IsNullOrEmpty(trimmed))
                     set.Add(trimmed);
             }
-            _apiIpPools[isp] = [.. set];
-            PersistFile("ippool.json", _apiIpPools);
+            pools[isp] = [.. set];
+            PersistFile(sourceType == FetchSourceType.Cname ? "cnamepool.json" : "ippool.json", pools);
         }
     }
 
@@ -92,13 +119,19 @@ public class DataStore
                 {
                     _apiIpPools[key] = [];
                 }
+                foreach (var key in _cnameIpPools.Keys.ToList())
+                {
+                    _cnameIpPools[key] = [];
+                }
             }
             else
             {
                 _apiIpPools[isp] = [];
+                _cnameIpPools[isp] = [];
             }
 
             PersistFile("ippool.json", _apiIpPools);
+            PersistFile("cnamepool.json", _cnameIpPools);
         }
     }
 
@@ -191,7 +224,8 @@ public class DataStore
                 return removed;
             }
 
-            if (_apiIpPools.TryGetValue(isp, out var apiPool))
+            var pools = string.Equals(source, "cname", StringComparison.OrdinalIgnoreCase) ? _cnameIpPools : _apiIpPools;
+            if (pools.TryGetValue(isp, out var apiPool))
             {
                 var filtered = apiPool
                     .Where(x => !string.Equals(x, ip, StringComparison.OrdinalIgnoreCase))
@@ -199,8 +233,8 @@ public class DataStore
                 removed = filtered.Count != apiPool.Count;
                 if (removed)
                 {
-                    _apiIpPools[isp] = filtered;
-                    PersistFile("ippool.json", _apiIpPools);
+                    pools[isp] = filtered;
+                    PersistFile(ReferenceEquals(pools, _cnameIpPools) ? "cnamepool.json" : "ippool.json", pools);
                 }
             }
 
@@ -273,9 +307,17 @@ public class DataStore
                 removed += before - _apiIpPools[isp].Count;
             }
 
+            if (_cnameIpPools.TryGetValue(isp, out var cnamePool))
+            {
+                var before = cnamePool.Count;
+                _cnameIpPools[isp] = cnamePool.Where(ip => !removeSet.Contains(ip)).ToList();
+                removed += before - _cnameIpPools[isp].Count;
+            }
+
             if (removed > 0)
             {
                 PersistFile("ippool.json", _apiIpPools);
+                PersistFile("cnamepool.json", _cnameIpPools);
             }
 
             return removed;
@@ -563,6 +605,12 @@ public class DataStore
             if (LoadFile("ippool.json", ref apiPools))
             {
                 _apiIpPools = apiPools;
+            }
+
+            var cnamePools = new Dictionary<string, List<string>>();
+            if (LoadFile("cnamepool.json", ref cnamePools))
+            {
+                _cnameIpPools = cnamePools;
             }
 
             var tokens = new List<BootstrapToken>();

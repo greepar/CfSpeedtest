@@ -467,8 +467,8 @@ public class RoundCoordinatorService : BackgroundService
         {
             var keepIps = topResults.Select(r => r.IpAddress).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var poolIps = _store.GetConfig().IpSources.TryGetValue(state.IspKey, out var source)
-                ? source.ManualIps.Concat(_store.GetApiIpPool(state.IspKey)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
-                : _store.GetApiIpPool(state.IspKey);
+                ? source.ManualIps.Concat(_store.GetFetchedIpPool(state.IspKey)).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                : _store.GetFetchedIpPool(state.IspKey);
             var removeIps = poolIps.Where(ip => !keepIps.Contains(ip)).ToList();
             if (removeIps.Count > 0)
             {

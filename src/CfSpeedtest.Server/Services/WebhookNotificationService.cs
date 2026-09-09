@@ -235,7 +235,7 @@ public sealed class WebhookNotificationService(
     private static bool IsOnline(ClientInfo client, ServerConfig config, DateTime now)
     {
         var onlineWindow = TimeSpan.FromSeconds(Math.Max(30, config.HeartbeatIntervalSeconds * 3));
-        return client.Allowed && client.LastSeenAt != DateTime.MinValue &&
+        return client.LastSeenAt != DateTime.MinValue &&
                now - client.LastSeenAt.ToUniversalTime() <= onlineWindow;
     }
 
