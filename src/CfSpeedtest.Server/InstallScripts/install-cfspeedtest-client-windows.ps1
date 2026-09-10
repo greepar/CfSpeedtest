@@ -4,7 +4,6 @@ param(
     [string]$Isp = 'Telecom',
     [string]$ClientName = '',
     [Parameter(Mandatory = $true)][string]$Repository,
-    [Parameter(Mandatory = $true)][string]$ReleaseTag,
     [string]$GhProxyPrefix = ''
 )
 
@@ -32,8 +31,7 @@ function Restart-Elevated {
         '-ClientId', $ClientId,
         '-Isp', $Isp,
         '-ClientName', $ClientName,
-        '-Repository', $Repository,
-        '-ReleaseTag', $ReleaseTag
+        '-Repository', $Repository
     )
 
     if (-not [string]::IsNullOrWhiteSpace($GhProxyPrefix)) {
@@ -55,7 +53,7 @@ function Get-Platform {
 }
 
 function Get-DownloadUrl([string]$AssetName) {
-    $rawUrl = "https://github.com/$Repository/releases/download/$ReleaseTag/$AssetName"
+    $rawUrl = "https://github.com/$Repository/releases/latest/download/$AssetName"
     if ([string]::IsNullOrWhiteSpace($GhProxyPrefix)) {
         return $rawUrl
     }

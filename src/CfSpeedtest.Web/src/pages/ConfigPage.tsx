@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Save } from "lucide-react";
+import { Download, RefreshCw, Save } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ServerConfig } from "@/lib/types";
+import type { ServerConfig, ServerUpdateCheckResult } from "@/lib/types";
 import {
   Button,
   Card,
@@ -19,11 +19,21 @@ export function ConfigPage() {
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateCheck, setUpdateCheck] =
+    useState<ServerUpdateCheckResult | null>(null);
 
   useEffect(() => {
     api
       .get<ServerConfig>("/api/config")
-      .then(setCfg)
+      .then((config) =>
+        setCfg({
+          ...config,
+          clientUpdateRepository:
+            config.clientUpdateRepository ||
+            config.serverUpdateRepository ||
+            "greepar/CfSpeedtest",
+        }),
+      )
       .catch(() => {});
   }, []);
 
@@ -52,8 +62,26 @@ export function ConfigPage() {
   async function checkServerUpdate() {
     setCheckingUpdate(true);
     try {
-      const message = await api.post<string>("/api/server/update");
+      const result = await api.post<ServerUpdateCheckResult>(
+        "/api/server/update/check",
+      );
+      setUpdateCheck(result);
+      toast(result.message, result.updateAvailable ? "info" : "success");
+    } catch (error) {
+      setUpdateCheck(null);
+      toast(error instanceof Error ? error.message : "检查更新失败", "error");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function installServerUpdate() {
+    setCheckingUpdate(true);
+    try {
+      const message = await api.post<string>("/api/server/update/install");
       toast(message, "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "服务端更新失败", "error");
     } finally {
       setCheckingUpdate(false);
     }
@@ -154,12 +182,20 @@ export function ConfigPage() {
           desc="原生部署自动安装 GitHub Release；Docker 部署请更新镜像"
           action={
             <Button
-              variant="secondary"
+              variant={updateCheck?.updateAvailable ? "primary" : "secondary"}
               loading={checkingUpdate}
-              onClick={checkServerUpdate}
+              onClick={
+                updateCheck?.updateAvailable
+                  ? installServerUpdate
+                  : checkServerUpdate
+              }
             >
-              <RefreshCw className="h-4 w-4" />
-              立即检查更新
+              {updateCheck?.updateAvailable ? (
+                <Download className="h-4 w-4" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {updateCheck?.updateAvailable ? "立即更新" : "检查更新"}
             </Button>
           }
         />
@@ -233,31 +269,10 @@ export function ConfigPage() {
               onChange={(e) => set("clientProxyUrl", e.target.value)}
             />
           </Field>
-          <Field label="更新源类型">
-            <Select
-              value={cfg.clientUpdateSourceType}
-              onChange={(e) => set("clientUpdateSourceType", e.target.value)}
-            >
-              <option value="github">github</option>
-              <option value="local">local</option>
-            </Select>
-          </Field>
-          <Field label="最新版本">
-            <Input
-              value={cfg.latestClientVersion}
-              onChange={(e) => set("latestClientVersion", e.target.value)}
-            />
-          </Field>
           <Field label="GitHub 仓库">
             <Input
               value={cfg.clientUpdateRepository}
               onChange={(e) => set("clientUpdateRepository", e.target.value)}
-            />
-          </Field>
-          <Field label="Release Tag">
-            <Input
-              value={cfg.clientUpdateReleaseTag}
-              onChange={(e) => set("clientUpdateReleaseTag", e.target.value)}
             />
           </Field>
           <Field label="GH Proxy 前缀">

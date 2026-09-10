@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using CfSpeedtest.Shared;
 
 namespace CfSpeedtest.Server.Services;
 
@@ -14,8 +15,9 @@ public sealed class ServerUpdateService(
 {
     private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(30);
     private readonly SemaphoreSlim _updateSignal = new(0, 1);
+    private readonly SemaphoreSlim _operationLock = new(1, 1);
 
-    public bool TriggerUpdateCheck()
+    public bool TriggerUpdateInstall()
     {
         try
         {
@@ -39,7 +41,7 @@ public sealed class ServerUpdateService(
             {
                 try
                 {
-                    await CheckAndInstallAsync(config.ServerUpdateRepository, config.ServerUpdateGhProxyPrefix, stoppingToken);
+                    await InstallAvailableUpdateAsync(stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -56,45 +58,111 @@ public sealed class ServerUpdateService(
         }
     }
 
-    private async Task CheckAndInstallAsync(string repository, string proxyPrefix, CancellationToken cancellationToken)
+    public async Task<ServerUpdateCheckResult> CheckForUpdateAsync(CancellationToken cancellationToken)
     {
-        if (IsContainer())
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            logger.LogInformation("Server auto-update skipped in a container; update the container image instead");
-            return;
+            return await CheckForUpdateCoreAsync(cancellationToken);
         }
-
-        var currentExe = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(currentExe) ||
-            !Path.GetFileNameWithoutExtension(currentExe).Equals("CfSpeedtest.Server", StringComparison.OrdinalIgnoreCase))
+        finally
         {
-            logger.LogInformation("Server auto-update requires the native CfSpeedtest.Server executable; current host is {ProcessPath}", currentExe);
-            return;
+            _operationLock.Release();
         }
+    }
 
-        repository = (repository ?? string.Empty).Trim().Trim('/');
-        if (string.IsNullOrWhiteSpace(repository) || repository.Count(c => c == '/') != 1)
-        {
-            logger.LogWarning("Server update repository must use owner/name format");
-            return;
-        }
-
-        using var client = httpClientFactory.CreateClient();
-        client.Timeout = TimeSpan.FromMinutes(5);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("CfSpeedtest-Server-Updater");
-        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-
-        var releaseApiUrl = ApplyProxy(proxyPrefix, $"https://api.github.com/repos/{repository}/releases/latest");
-        using var releaseResponse = await client.GetAsync(releaseApiUrl, cancellationToken);
-        releaseResponse.EnsureSuccessStatusCode();
-        await using var releaseStream = await releaseResponse.Content.ReadAsStreamAsync(cancellationToken);
-        using var release = await JsonDocument.ParseAsync(releaseStream, cancellationToken: cancellationToken);
-
+    public async Task<ClientUpdateInfo> CheckClientUpdateAsync(string currentVersionText, string platform, CancellationToken cancellationToken)
+    {
+        var config = store.GetConfig();
+        var currentVersion = ParseVersion(currentVersionText, "客户端版本号");
+        var repository = ValidateRepository(GetClientUpdateRepository(config));
+        using var release = await GetLatestReleaseAsync(repository, config.ClientUpdateGhProxyPrefix, cancellationToken);
         var root = release.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
+        var latestVersion = ParseVersion(tag, "GitHub Release 版本号");
+        var fileName = GetClientUpdateFileName(platform);
+        var asset = root.GetProperty("assets")
+            .EnumerateArray()
+            .FirstOrDefault(candidate => string.Equals(candidate.GetProperty("name").GetString(), fileName, StringComparison.OrdinalIgnoreCase));
+        var downloadUrl = asset.ValueKind == JsonValueKind.Object && asset.TryGetProperty("browser_download_url", out var urlProperty)
+            ? urlProperty.GetString()
+            : null;
+        var hasUpdate = latestVersion > currentVersion;
+
+        return new ClientUpdateInfo
+        {
+            Enabled = config.ClientUpdateEnabled,
+            CurrentVersion = currentVersion.ToString(3),
+            LatestVersion = latestVersion.ToString(3),
+            Platform = platform,
+            HasUpdate = config.ClientUpdateEnabled && hasUpdate && !string.IsNullOrWhiteSpace(downloadUrl),
+            DownloadUrl = config.ClientUpdateEnabled && hasUpdate && !string.IsNullOrWhiteSpace(downloadUrl)
+                ? ApplyProxy(config.ClientUpdateGhProxyPrefix, downloadUrl)
+                : null,
+            PackageFileName = fileName,
+            Message = !config.ClientUpdateEnabled
+                ? "客户端自动更新未启用"
+                : !hasUpdate
+                    ? "当前已是最新版本"
+                    : string.IsNullOrWhiteSpace(downloadUrl)
+                        ? $"Release {tag} 不包含当前平台安装包 {fileName}"
+                        : "发现新版本"
+        };
+    }
+
+    public async Task InstallAvailableUpdateAsync(CancellationToken cancellationToken)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            var check = await CheckForUpdateCoreAsync(cancellationToken);
+            if (!check.UpdateAvailable)
+                return;
+
+            await DownloadAndInstallAsync(check.LatestVersion, cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private async Task<ServerUpdateCheckResult> CheckForUpdateCoreAsync(CancellationToken cancellationToken)
+    {
+        var config = store.GetConfig();
+        var repository = ValidateRepository(config.ServerUpdateRepository);
+        using var release = await GetLatestReleaseAsync(repository, config.ServerUpdateGhProxyPrefix, cancellationToken);
+        var tag = release.RootElement.GetProperty("tag_name").GetString() ?? string.Empty;
         var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version();
-        if (!TryParseVersion(tag, out var latestVersion) || latestVersion <= currentVersion)
-            return;
+        if (!TryParseVersion(tag, out var latestVersion))
+            throw new InvalidDataException($"GitHub Release 版本号无效：{tag}");
+
+        var updateAvailable = latestVersion > currentVersion;
+        return new ServerUpdateCheckResult
+        {
+            UpdateAvailable = updateAvailable,
+            CurrentVersion = currentVersion.ToString(3),
+            LatestVersion = latestVersion.ToString(3),
+            Message = updateAvailable
+                ? $"发现新版本 {latestVersion.ToString(3)}"
+                : "目前已经是最新版本"
+        };
+    }
+
+    private async Task DownloadAndInstallAsync(string expectedVersion, CancellationToken cancellationToken)
+    {
+        EnsureUpdateSupported();
+        var config = store.GetConfig();
+        var repository = ValidateRepository(config.ServerUpdateRepository);
+        var proxyPrefix = config.ServerUpdateGhProxyPrefix;
+        var currentExe = Environment.ProcessPath!;
+        using var release = await GetLatestReleaseAsync(repository, proxyPrefix, cancellationToken);
+        var root = release.RootElement;
+        var tag = root.GetProperty("tag_name").GetString() ?? string.Empty;
+        if (!TryParseVersion(tag, out var latestVersion) || latestVersion.ToString(3) != expectedVersion)
+            throw new InvalidOperationException("最新版本在检查后发生变化，请重新检查更新");
+
+        var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version();
 
         var platform = DetectPlatform();
         var fileName = $"cfspeedtest-server-{platform}.zip";
@@ -106,10 +174,7 @@ public sealed class ServerUpdateService(
             : null;
 
         if (string.IsNullOrWhiteSpace(downloadUrl))
-        {
-            logger.LogWarning("Release {Tag} does not contain {FileName}", tag, fileName);
-            return;
-        }
+            throw new InvalidDataException($"Release {tag} 不包含当前平台安装包 {fileName}");
 
         logger.LogInformation("Downloading server update {CurrentVersion} -> {LatestVersion}", currentVersion, latestVersion);
         var updateRoot = Path.Combine(Path.GetTempPath(), $"cfspeedtest-server-update-{Guid.NewGuid():N}");
@@ -119,6 +184,9 @@ public sealed class ServerUpdateService(
 
         try
         {
+            using var client = httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromMinutes(5);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("CfSpeedtest-Server-Updater");
             using var packageResponse = await client.GetAsync(ApplyProxy(proxyPrefix, downloadUrl), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             packageResponse.EnsureSuccessStatusCode();
             await using (var download = await packageResponse.Content.ReadAsStreamAsync(cancellationToken))
@@ -150,6 +218,45 @@ public sealed class ServerUpdateService(
         {
             try { Directory.Delete(updateRoot, recursive: true); } catch { }
         }
+    }
+
+    private async Task<JsonDocument> GetLatestReleaseAsync(string repository, string proxyPrefix, CancellationToken cancellationToken)
+    {
+        using var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("CfSpeedtest-Server-Updater");
+        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        var releaseApiUrl = ApplyProxy(proxyPrefix, $"https://api.github.com/repos/{repository}/releases/latest");
+        using var response = await client.GetAsync(releaseApiUrl, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+    }
+
+    private static string ValidateRepository(string repository)
+    {
+        repository = (repository ?? string.Empty).Trim().Trim('/');
+        if (string.IsNullOrWhiteSpace(repository) || repository.Count(c => c == '/') != 1)
+            throw new InvalidOperationException("服务端更新仓库必须使用 owner/name 格式");
+        return repository;
+    }
+
+    private static string GetClientUpdateRepository(ServerConfig config) =>
+        !string.IsNullOrWhiteSpace(config.ClientUpdateRepository)
+            ? config.ClientUpdateRepository
+            : !string.IsNullOrWhiteSpace(config.ServerUpdateRepository)
+                ? config.ServerUpdateRepository
+                : "greepar/CfSpeedtest";
+
+    private static void EnsureUpdateSupported()
+    {
+        if (IsContainer())
+            throw new InvalidOperationException("Docker 部署不能在线更新，请更新容器镜像");
+
+        var currentExe = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(currentExe) ||
+            !Path.GetFileNameWithoutExtension(currentExe).Equals("CfSpeedtest.Server", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("当前不是原生 CfSpeedtest.Server 进程，不能执行在线更新");
     }
 
     private static void ReplaceUnixExecutable(string stagedExe, string currentExe)
@@ -242,6 +349,32 @@ public sealed class ServerUpdateService(
 
     private static bool TryParseVersion(string value, out Version version) =>
         Version.TryParse(value.Trim().TrimStart('v', 'V'), out version!);
+
+    private static Version ParseVersion(string value, string fieldName)
+    {
+        var normalized = value.Trim().TrimStart('v', 'V');
+        var metadataIndex = normalized.IndexOfAny(['+', '-']);
+        if (metadataIndex >= 0)
+            normalized = normalized[..metadataIndex];
+        if (!Version.TryParse(normalized, out var version))
+            throw new InvalidDataException($"{fieldName}无效：{value}");
+        return version;
+    }
+
+    private static string GetClientUpdateFileName(string platform) => platform switch
+    {
+        "win-x86" => "cfspeedtest-client-win-x86.zip",
+        "win-x64" => "cfspeedtest-client-win-x64.zip",
+        "win-arm64" => "cfspeedtest-client-win-arm64.zip",
+        "linux-x64" => "cfspeedtest-client-linux-x64.zip",
+        "linux-musl-x64" => "cfspeedtest-client-linux-musl-x64.zip",
+        "linux-arm64" => "cfspeedtest-client-linux-arm64.zip",
+        "linux-musl-arm64" => "cfspeedtest-client-linux-musl-arm64.zip",
+        "linux-arm" => "cfspeedtest-client-linux-arm.zip",
+        "osx-x64" => "cfspeedtest-client-osx-x64.zip",
+        "osx-arm64" => "cfspeedtest-client-osx-arm64.zip",
+        _ => $"cfspeedtest-client-{platform}.zip"
+    };
 
     private static bool IsContainer() =>
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase) ||

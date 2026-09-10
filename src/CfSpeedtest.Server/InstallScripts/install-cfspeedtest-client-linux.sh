@@ -6,7 +6,6 @@ CLIENT_ID=""
 ISP="Telecom"
 CLIENT_NAME=""
 REPOSITORY=""
-RELEASE_TAG=""
 GH_PROXY_PREFIX=""
 
 while [[ $# -gt 0 ]]; do
@@ -16,7 +15,6 @@ while [[ $# -gt 0 ]]; do
     --isp) ISP="${2:-}"; shift 2 ;;
     --name) CLIENT_NAME="${2:-}"; shift 2 ;;
     --repository) REPOSITORY="${2:-}"; shift 2 ;;
-    --release-tag) RELEASE_TAG="${2:-}"; shift 2 ;;
     --gh-proxy-prefix) GH_PROXY_PREFIX="${2:-}"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -25,8 +23,8 @@ done
 log() { echo "[CfSpeedtest] $1"; }
 fail() { echo "[CfSpeedtest] $1" >&2; exit 1; }
 
-if [[ -z "$SERVER_URL" || -z "$CLIENT_ID" || -z "$REPOSITORY" || -z "$RELEASE_TAG" ]]; then
-  fail "Usage: --server <url> --client-id <id> [--isp <Telecom|Unicom|Mobile>] [--name <name>] --repository <owner/repo> --release-tag <tag> [--gh-proxy-prefix <prefix>]"
+if [[ -z "$SERVER_URL" || -z "$CLIENT_ID" || -z "$REPOSITORY" ]]; then
+  fail "Usage: --server <url> --client-id <id> [--isp <Telecom|Unicom|Mobile>] [--name <name>] --repository <owner/repo> [--gh-proxy-prefix <prefix>]"
 fi
 
 if [ "${EUID}" -ne 0 ]; then
@@ -68,7 +66,7 @@ detect_rid() {
 
 build_download_url() {
   local asset="$1"
-  local raw_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/${asset}"
+  local raw_url="https://github.com/${REPOSITORY}/releases/latest/download/${asset}"
   if [[ -n "$GH_PROXY_PREFIX" ]]; then
     echo "${GH_PROXY_PREFIX%/}/${raw_url}"
   else

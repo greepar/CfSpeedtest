@@ -247,25 +247,6 @@ public class ClientUpdateInfo
     public string? Message { get; set; }
 }
 
-public class ClientUpdatePackageStatus
-{
-    public string Platform { get; set; } = string.Empty;
-    public string FileName { get; set; } = string.Empty;
-    public string DownloadUrl { get; set; } = string.Empty;
-}
-
-public class ClientUpdateOverview
-{
-    public bool Enabled { get; set; }
-    public string LatestVersion { get; set; } = string.Empty;
-    public string SourceType { get; set; } = string.Empty;
-    public string Repository { get; set; } = string.Empty;
-    public string ReleaseTag { get; set; } = string.Empty;
-    public string GhProxyPrefix { get; set; } = string.Empty;
-    public string LocalDirectory { get; set; } = string.Empty;
-    public List<ClientUpdatePackageStatus> Packages { get; set; } = [];
-}
-
 public class ClientInstallScriptResponse
 {
     public string Platform { get; set; } = string.Empty;
@@ -439,6 +420,14 @@ public class ServerInfo
 {
     public string Name { get; set; } = "CfSpeedtest";
     public string Version { get; set; } = string.Empty;
+}
+
+public class ServerUpdateCheckResult
+{
+    public bool UpdateAvailable { get; set; }
+    public string CurrentVersion { get; set; } = string.Empty;
+    public string LatestVersion { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -671,17 +660,8 @@ public class ServerConfig
     /// <summary>是否启用客户端版本检查和更新</summary>
     public bool ClientUpdateEnabled { get; set; }
 
-    /// <summary>客户端更新源类型：github 或 local</summary>
-    public string ClientUpdateSourceType { get; set; } = "github";
-
-    /// <summary>服务端提供的最新客户端版本号</summary>
-    public string LatestClientVersion { get; set; } = string.Empty;
-
     /// <summary>GitHub 仓库，例如 greepar/CfSpeedtest</summary>
-    public string ClientUpdateRepository { get; set; } = string.Empty;
-
-    /// <summary>GitHub Release Tag，例如 v1.0 或 v1.x</summary>
-    public string ClientUpdateReleaseTag { get; set; } = string.Empty;
+    public string ClientUpdateRepository { get; set; } = "greepar/CfSpeedtest";
 
     /// <summary>可选的 GH Proxy 前缀，例如 https://ghproxy.com/</summary>
     public string ClientUpdateGhProxyPrefix { get; set; } = string.Empty;

@@ -103,6 +103,13 @@ export interface ServerInfo {
   version: string;
 }
 
+export interface ServerUpdateCheckResult {
+  updateAvailable: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  message: string;
+}
+
 export interface WebUiSessionOverview {
   username: string;
   userAgent: string;
@@ -185,10 +192,7 @@ export interface ServerConfig {
   maxDownloadSpeedKBps: number;
   clientWhitelistOnly: boolean;
   clientUpdateEnabled: boolean;
-  clientUpdateSourceType: string;
-  latestClientVersion: string;
   clientUpdateRepository: string;
-  clientUpdateReleaseTag: string;
   clientUpdateGhProxyPrefix: string;
   serverAutoUpdateEnabled: boolean;
   serverUpdateIntervalMinutes: number;

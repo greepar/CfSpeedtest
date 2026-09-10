@@ -11,8 +11,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.StaticFiles;
 
 var builder = WebApplication.CreateBuilder(args);
-var clientUpdatesDir = Path.Combine(builder.Environment.ContentRootPath, "client-updates");
-Directory.CreateDirectory(clientUpdatesDir);
 var materialWebDir = new[]
 {
     Path.Combine(builder.Environment.ContentRootPath, "material-web"),
@@ -122,12 +120,6 @@ if (!string.IsNullOrWhiteSpace(materialWebDir))
         DefaultContentType = "application/octet-stream"
     });
 }
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(clientUpdatesDir),
-    RequestPath = "/client-updates"
-});
-
 // ============================================================
 //  API: 客户端注册
 // ============================================================
@@ -327,148 +319,18 @@ app.Map("/api/client/ws", async (HttpContext context, DataStore store, RoundCoor
 // ============================================================
 //  API: 客户端检查更新
 // ============================================================
-app.MapGet("/api/client/update", (HttpContext http, DataStore store, string version, string? platform) =>
+app.MapGet("/api/client/update", async (ServerUpdateService updates, string version, string? platform, CancellationToken cancellationToken) =>
 {
-    var config = store.GetConfig();
     var currentVersion = string.IsNullOrWhiteSpace(version) ? "0.0.0" : version.Trim();
-    var latestVersion = string.IsNullOrWhiteSpace(config.LatestClientVersion) ? currentVersion : config.LatestClientVersion.Trim();
     var clientPlatform = string.IsNullOrWhiteSpace(platform) ? "win-x64" : platform.Trim();
-    var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
-    var repository = config.ClientUpdateRepository.Trim();
-    var releaseTag = config.ClientUpdateReleaseTag.Trim();
-    var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
-
-    if (!config.ClientUpdateEnabled)
+    try
     {
-        return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
-        {
-            Enabled = false,
-            CurrentVersion = currentVersion,
-            LatestVersion = latestVersion,
-            Platform = clientPlatform,
-            HasUpdate = false,
-            Message = "客户端自动更新未启用"
-        });
+        return ApiResponse<ClientUpdateInfo>.Ok(await updates.CheckClientUpdateAsync(currentVersion, clientPlatform, cancellationToken));
     }
-
-    if (string.IsNullOrWhiteSpace(latestVersion))
+    catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or HttpRequestException or TaskCanceledException or JsonException)
     {
-        return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
-        {
-            Enabled = true,
-            CurrentVersion = currentVersion,
-            LatestVersion = latestVersion,
-            Platform = clientPlatform,
-            HasUpdate = false,
-            Message = "服务端未配置最新客户端版本号"
-        });
+        return ApiResponse<ClientUpdateInfo>.Fail(ex is TaskCanceledException ? "检查客户端更新超时" : $"检查客户端更新失败：{ex.Message}");
     }
-
-    var hasUpdate = IsVersionNewer(latestVersion, currentVersion);
-    var fileName = GetClientUpdateFileName(clientPlatform);
-    string? downloadUrl = null;
-
-    if (sourceType == "local")
-    {
-        var packageFile = Path.Combine(clientUpdatesDir, fileName);
-        if (!File.Exists(packageFile))
-        {
-            return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
-            {
-                Enabled = true,
-                CurrentVersion = currentVersion,
-                LatestVersion = latestVersion,
-                Platform = clientPlatform,
-                HasUpdate = false,
-                Message = $"服务端本地更新目录缺少文件 {fileName}"
-            });
-        }
-
-        var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}";
-        downloadUrl = $"{baseUrl}/client-updates/{fileName}";
-    }
-    else
-    {
-        if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
-        {
-            return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
-            {
-                Enabled = true,
-                CurrentVersion = currentVersion,
-                LatestVersion = latestVersion,
-                Platform = clientPlatform,
-                HasUpdate = false,
-                Message = "服务端未配置 GitHub Release 更新源"
-            });
-        }
-
-        var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
-        downloadUrl = string.IsNullOrWhiteSpace(ghProxyPrefix)
-            ? rawUrl
-            : CombineProxyUrl(ghProxyPrefix, rawUrl);
-    }
-
-    return ApiResponse<ClientUpdateInfo>.Ok(new ClientUpdateInfo
-    {
-        Enabled = true,
-        CurrentVersion = currentVersion,
-        LatestVersion = latestVersion,
-        Platform = clientPlatform,
-        HasUpdate = hasUpdate,
-        DownloadUrl = hasUpdate ? downloadUrl : null,
-        PackageFileName = fileName,
-        Message = hasUpdate ? "发现新版本" : "当前已是最新版本"
-    });
-});
-
-app.MapGet("/api/client/update/overview", (DataStore store) =>
-{
-    var config = store.GetConfig();
-    var platforms = new[] { "win-x86", "win-x64", "win-arm64", "linux-x64", "linux-musl-x64", "linux-arm64", "linux-musl-arm64", "linux-arm", "osx-x64", "osx-arm64" };
-    var packages = new List<ClientUpdatePackageStatus>();
-    var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
-    var repository = config.ClientUpdateRepository.Trim();
-    var releaseTag = config.ClientUpdateReleaseTag.Trim();
-    var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
-
-    foreach (var platform in platforms)
-    {
-        var fileName = GetClientUpdateFileName(platform);
-        string downloadUrl;
-        if (sourceType == "local")
-        {
-            var packageFile = Path.Combine(clientUpdatesDir, fileName);
-            downloadUrl = File.Exists(packageFile) ? $"/client-updates/{fileName}" : string.Empty;
-        }
-        else
-        {
-            var rawUrl = string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag)
-                ? string.Empty
-                : $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
-            downloadUrl = string.IsNullOrWhiteSpace(rawUrl)
-                ? string.Empty
-                : (string.IsNullOrWhiteSpace(ghProxyPrefix) ? rawUrl : CombineProxyUrl(ghProxyPrefix, rawUrl));
-        }
-
-        packages.Add(new ClientUpdatePackageStatus
-        {
-            Platform = platform,
-            FileName = fileName,
-            DownloadUrl = downloadUrl,
-        });
-    }
-
-    return ApiResponse<ClientUpdateOverview>.Ok(new ClientUpdateOverview
-    {
-        Enabled = config.ClientUpdateEnabled,
-        LatestVersion = config.LatestClientVersion,
-        SourceType = sourceType,
-        Repository = repository,
-        ReleaseTag = releaseTag,
-        GhProxyPrefix = ghProxyPrefix,
-        LocalDirectory = clientUpdatesDir,
-        Packages = packages,
-    });
 });
 
 app.MapPost("/api/client/install-script", (ClientInstallScriptRequest req, DataStore store) =>
@@ -999,11 +861,23 @@ app.MapPost("/api/notifications/test", async (WebhookNotificationService notific
     }
 });
 
-app.MapPost("/api/server/update", (ServerUpdateService updates) =>
+app.MapPost("/api/server/update/check", async (ServerUpdateService updates, CancellationToken cancellationToken) =>
 {
-    return updates.TriggerUpdateCheck()
-        ? ApiResponse<string>.Ok("服务端更新检查已排队")
-        : ApiResponse<string>.Ok("服务端更新检查已在等待执行");
+    try
+    {
+        return ApiResponse<ServerUpdateCheckResult>.Ok(await updates.CheckForUpdateAsync(cancellationToken));
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or HttpRequestException or TaskCanceledException or JsonException)
+    {
+        return ApiResponse<ServerUpdateCheckResult>.Fail(ex is TaskCanceledException ? "检查更新超时" : $"检查更新失败：{ex.Message}");
+    }
+});
+
+app.MapPost("/api/server/update/install", (ServerUpdateService updates) =>
+{
+    return updates.TriggerUpdateInstall()
+        ? ApiResponse<string>.Ok("服务端更新已开始，安装完成后服务将自动重启")
+        : ApiResponse<string>.Ok("服务端更新已在执行中");
 });
 
 // ============================================================
@@ -1373,8 +1247,7 @@ static string BuildInstallCommand(string platform, string scriptUrl, ServerConfi
             "-ClientId " + PsSingleQuote(clientId),
             "-Isp " + PsSingleQuote(isp),
             "-ClientName " + PsSingleQuote(name),
-            "-Repository " + PsSingleQuote(config.ClientUpdateRepository.Trim()),
-            "-ReleaseTag " + PsSingleQuote(config.ClientUpdateReleaseTag.Trim())
+            "-Repository " + PsSingleQuote(GetClientUpdateRepository(config))
         };
 
         if (includeProxy && !string.IsNullOrWhiteSpace(config.ClientUpdateGhProxyPrefix))
@@ -1394,8 +1267,7 @@ static string BuildInstallCommand(string platform, string scriptUrl, ServerConfi
         "--client-id " + ShellQuote(clientId),
         "--isp " + ShellQuote(isp),
         "--name " + ShellQuote(name),
-        "--repository " + ShellQuote(config.ClientUpdateRepository.Trim()),
-        "--release-tag " + ShellQuote(config.ClientUpdateReleaseTag.Trim())
+        "--repository " + ShellQuote(GetClientUpdateRepository(config))
     };
 
     if (includeProxy && !string.IsNullOrWhiteSpace(config.ClientUpdateGhProxyPrefix))
@@ -1452,25 +1324,18 @@ static string BuildUninstallCommand(string platform)
 
 static (string FileName, string Url, string Source, string ServiceKind)? BuildInstallScriptInfo(ServerConfig config, string platform, bool includeProxy)
 {
-    var sourceType = string.IsNullOrWhiteSpace(config.ClientUpdateSourceType) ? "github" : config.ClientUpdateSourceType.Trim().ToLowerInvariant();
     var fileName = platform == "windows"
         ? "install-cfspeedtest-client-windows.ps1"
         : (platform == "macos" ? "install-cfspeedtest-client-macos.sh" : "install-cfspeedtest-client-linux.sh");
     var serviceKind = platform == "windows" ? "windows-service" : (platform == "macos" ? "launchd" : "auto-detect");
 
-    if (sourceType != "github")
+    var repository = GetClientUpdateRepository(config);
+    if (string.IsNullOrWhiteSpace(repository))
     {
         return null;
     }
 
-    var repository = config.ClientUpdateRepository.Trim();
-    var releaseTag = config.ClientUpdateReleaseTag.Trim();
-    if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
-    {
-        return null;
-    }
-
-    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{fileName}";
+    var rawUrl = $"https://github.com/{repository}/releases/latest/download/{fileName}";
     var url = includeProxy && !string.IsNullOrWhiteSpace(config.ClientUpdateGhProxyPrefix)
         ? CombineProxyUrl(config.ClientUpdateGhProxyPrefix.Trim(), rawUrl)
         : rawUrl;
@@ -1488,25 +1353,17 @@ static string PsSingleQuote(string value)
     return "'" + (value ?? string.Empty).Replace("'", "''") + "'";
 }
 
+static string GetClientUpdateRepository(ServerConfig config) =>
+    !string.IsNullOrWhiteSpace(config.ClientUpdateRepository)
+        ? config.ClientUpdateRepository.Trim()
+        : !string.IsNullOrWhiteSpace(config.ServerUpdateRepository)
+            ? config.ServerUpdateRepository.Trim()
+            : "greepar/CfSpeedtest";
+
 static string BuildEncodedPowerShellCommand(string script)
 {
     var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
     return "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encoded;
-}
-
-static bool IsVersionNewer(string latestVersion, string currentVersion)
-{
-    if (Version.TryParse(latestVersion, out var latest) && Version.TryParse(currentVersion, out var current))
-    {
-        return latest > current;
-    }
-
-    return !string.Equals(latestVersion, currentVersion, StringComparison.OrdinalIgnoreCase);
-}
-
-static string GetClientUpdateFileName(string platform)
-{
-    return $"cfspeedtest-client-{platform}.zip";
 }
 
 static async Task<string?> ReceiveWebSocketTextMessageAsync(WebSocket socket, byte[] buffer, CancellationToken cancellationToken)
@@ -1545,8 +1402,7 @@ static bool RequiresWebUiAuth(PathString path)
         value.Equals("/api/report", StringComparison.OrdinalIgnoreCase))
         return false;
 
-    if (value.StartsWith("/client-updates/", StringComparison.OrdinalIgnoreCase) ||
-        value.StartsWith("/install/client/", StringComparison.OrdinalIgnoreCase))
+    if (value.StartsWith("/install/client/", StringComparison.OrdinalIgnoreCase))
         return false;
 
     if (value.StartsWith("/i/", StringComparison.OrdinalIgnoreCase))
@@ -1619,7 +1475,6 @@ static bool IsEmbeddedWebAssetCandidate(PathString path)
     var value = path.Value ?? string.Empty;
     if (value.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) ||
         value.StartsWith("/api", StringComparison.OrdinalIgnoreCase) ||
-        value.StartsWith("/client-updates/", StringComparison.OrdinalIgnoreCase) ||
         value.StartsWith("/material-web/", StringComparison.OrdinalIgnoreCase) ||
         value.StartsWith("/install/client/", StringComparison.OrdinalIgnoreCase) ||
         value.StartsWith("/i/", StringComparison.OrdinalIgnoreCase))
@@ -1657,17 +1512,16 @@ static string BuildBootstrapBashScript(BootstrapToken token, ServerConfig config
     var clientId = token.ClientId;
     var isp = token.Isp.ToString();
     var name = string.IsNullOrWhiteSpace(token.Name) ? $"{isp}-{clientId[..6]}" : token.Name;
-    var repository = config.ClientUpdateRepository.Trim();
-    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    var repository = GetClientUpdateRepository(config);
     var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
 
-    if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    if (string.IsNullOrWhiteSpace(repository))
     {
-        return "#!/usr/bin/env bash\necho '[CfSpeedtest] 服务端未配置 GitHub 仓库或 Release Tag，无法部署' >&2\nexit 1\n";
+        return "#!/usr/bin/env bash\necho '[CfSpeedtest] 服务端未配置 GitHub 仓库，无法部署' >&2\nexit 1\n";
     }
 
     var scriptFile = "install-cfspeedtest-client-linux.sh";
-    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{scriptFile}";
+    var rawUrl = $"https://github.com/{repository}/releases/latest/download/{scriptFile}";
     var scriptUrl = (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
         ? CombineProxyUrl(ghProxyPrefix, rawUrl)
         : rawUrl;
@@ -1679,7 +1533,6 @@ static string BuildBootstrapBashScript(BootstrapToken token, ServerConfig config
         "--isp " + ShellQuote(isp),
         "--name " + ShellQuote(name),
         "--repository " + ShellQuote(repository),
-        "--release-tag " + ShellQuote(releaseTag),
     };
 
     if (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
@@ -1708,7 +1561,7 @@ static string BuildBootstrapBashScript(BootstrapToken token, ServerConfig config
     sb.AppendLine("UNAME_S=\"$(uname -s 2>/dev/null || echo Linux)\"");
     sb.AppendLine($"SCRIPT_URL_LINUX={ShellQuote(scriptUrl)}");
     var macScriptFile = "install-cfspeedtest-client-macos.sh";
-    var macRaw = $"https://github.com/{repository}/releases/download/{releaseTag}/{macScriptFile}";
+    var macRaw = $"https://github.com/{repository}/releases/latest/download/{macScriptFile}";
     var macUrl = (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
         ? CombineProxyUrl(ghProxyPrefix, macRaw)
         : macRaw;
@@ -1747,17 +1600,16 @@ static string BuildBootstrapPowerShellScript(BootstrapToken token, ServerConfig 
     var clientId = token.ClientId;
     var isp = token.Isp.ToString();
     var name = string.IsNullOrWhiteSpace(token.Name) ? $"{isp}-{clientId[..6]}" : token.Name;
-    var repository = config.ClientUpdateRepository.Trim();
-    var releaseTag = config.ClientUpdateReleaseTag.Trim();
+    var repository = GetClientUpdateRepository(config);
     var ghProxyPrefix = config.ClientUpdateGhProxyPrefix.Trim();
 
-    if (string.IsNullOrWhiteSpace(repository) || string.IsNullOrWhiteSpace(releaseTag))
+    if (string.IsNullOrWhiteSpace(repository))
     {
-        return "Write-Error '[CfSpeedtest] 服务端未配置 GitHub 仓库或 Release Tag，无法部署'\nexit 1\n";
+        return "Write-Error '[CfSpeedtest] 服务端未配置 GitHub 仓库，无法部署'\nexit 1\n";
     }
 
     var scriptFile = "install-cfspeedtest-client-windows.ps1";
-    var rawUrl = $"https://github.com/{repository}/releases/download/{releaseTag}/{scriptFile}";
+    var rawUrl = $"https://github.com/{repository}/releases/latest/download/{scriptFile}";
     var scriptUrl = (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
         ? CombineProxyUrl(ghProxyPrefix, rawUrl)
         : rawUrl;
@@ -1773,7 +1625,6 @@ static string BuildBootstrapPowerShellScript(BootstrapToken token, ServerConfig 
     sb.AppendLine($"$Isp       = {PsSingleQuote(isp)}");
     sb.AppendLine($"$ClientName= {PsSingleQuote(name)}");
     sb.AppendLine($"$Repository= {PsSingleQuote(repository)}");
-    sb.AppendLine($"$ReleaseTag= {PsSingleQuote(releaseTag)}");
     if (token.IncludeProxy && !string.IsNullOrWhiteSpace(ghProxyPrefix))
     {
         sb.AppendLine($"$GhProxyPrefix = {PsSingleQuote(ghProxyPrefix)}");
@@ -1793,8 +1644,7 @@ static string BuildBootstrapPowerShellScript(BootstrapToken token, ServerConfig 
     sb.AppendLine("    '-ClientId',$ClientId,");
     sb.AppendLine("    '-Isp',$Isp,");
     sb.AppendLine("    '-ClientName',$ClientName,");
-    sb.AppendLine("    '-Repository',$Repository,");
-    sb.AppendLine("    '-ReleaseTag',$ReleaseTag");
+    sb.AppendLine("    '-Repository',$Repository");
     sb.AppendLine(")");
     sb.AppendLine("if (-not [string]::IsNullOrWhiteSpace($GhProxyPrefix)) {");
     sb.AppendLine("    $psArgs += @('-GhProxyPrefix',$GhProxyPrefix)");

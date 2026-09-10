@@ -17,7 +17,6 @@ export default defineConfig({
     proxy: {
       "/api": { target: BACKEND, changeOrigin: true, ws: true },
       "/i": { target: BACKEND, changeOrigin: true },
-      "/client-updates": { target: BACKEND, changeOrigin: true },
     },
   },
   build: {
