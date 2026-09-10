@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using CfSpeedtest.Shared;
@@ -254,10 +255,8 @@ public sealed class ServerUpdateService(
             throw new InvalidOperationException("Docker 部署不能在线更新，请更新容器镜像");
 
         var currentExe = Environment.ProcessPath;
-        var expectedFileName = OperatingSystem.IsWindows() ? "CfSpeedtest.Server.exe" : "CfSpeedtest.Server";
-        if (string.IsNullOrWhiteSpace(currentExe) ||
-            !Path.GetFileName(currentExe).Equals(expectedFileName, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("当前不是原生 CfSpeedtest.Server 进程，不能执行在线更新");
+        if (RuntimeFeature.IsDynamicCodeSupported || string.IsNullOrWhiteSpace(currentExe) || !File.Exists(currentExe))
+            throw new InvalidOperationException("当前不是 NativeAOT 单文件进程，不能执行在线更新");
     }
 
     private static void ReplaceUnixExecutable(string stagedExe, string currentExe)

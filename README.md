@@ -99,7 +99,7 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 ```bash
 docker compose up -d
 docker compose pull && docker compose up -d
-IMAGE_TAG=v2.0.1 docker compose up -d
+IMAGE_TAG=v2.0.2 docker compose up -d
 ```
 
 需要自定义配置时，复制 `docker-compose.example.env` 为 `.env`。
@@ -356,7 +356,7 @@ src/CfSpeedtest.Server/Services/DnsUpdateService.cs
 
 ## NativeAOT 发布
 
-原生 `CfSpeedtest.Server` 会默认每 6 小时检查一次 GitHub 最新 Release。发现新版本后会下载当前平台的 Server ZIP、替换程序并重启；systemd/OpenRC 托管时由服务管理器重新拉起。
+NativeAOT 单文件服务端会默认每 6 小时检查一次 GitHub 最新 Release。发现新版本后会下载当前平台的 Server ZIP、替换当前实际运行的可执行文件并重启，不要求可执行文件使用固定名称；systemd/OpenRC 托管时由服务管理器重新拉起。
 
 Docker 部署不会在容器内自更新，请使用：
 
@@ -364,7 +364,7 @@ Docker 部署不会在容器内自更新，请使用：
 docker compose pull && docker compose up -d
 ```
 
-使用 `dotnet CfSpeedtest.Server.dll` 的框架依赖部署也不会自动覆盖；服务端自动更新仅支持 Release 中的原生单文件程序。开关、检查间隔、GitHub 仓库及 GH Proxy 可在 WebUI 配置页调整，也可点击“立即检查更新”手动触发。
+使用 `dotnet CfSpeedtest.Server.dll` 的框架依赖部署不会自动覆盖；服务端自动更新仅支持 Release 中的 NativeAOT 单文件程序。开关、检查间隔、GitHub 仓库及 GH Proxy 可在 WebUI 配置页调整，也可点击“检查更新”，发现新版本后再点击“立即更新”。
 
 ### Windows x64
 
