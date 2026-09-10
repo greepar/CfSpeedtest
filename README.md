@@ -99,7 +99,7 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 ```bash
 docker compose up -d
 docker compose pull && docker compose up -d
-IMAGE_TAG=v2.0 docker compose up -d
+IMAGE_TAG=v2.0.1 docker compose up -d
 ```
 
 需要自定义配置时，复制 `docker-compose.example.env` 为 `.env`。

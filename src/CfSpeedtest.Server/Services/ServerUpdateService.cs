@@ -254,8 +254,9 @@ public sealed class ServerUpdateService(
             throw new InvalidOperationException("Docker 部署不能在线更新，请更新容器镜像");
 
         var currentExe = Environment.ProcessPath;
+        var expectedFileName = OperatingSystem.IsWindows() ? "CfSpeedtest.Server.exe" : "CfSpeedtest.Server";
         if (string.IsNullOrWhiteSpace(currentExe) ||
-            !Path.GetFileNameWithoutExtension(currentExe).Equals("CfSpeedtest.Server", StringComparison.OrdinalIgnoreCase))
+            !Path.GetFileName(currentExe).Equals(expectedFileName, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("当前不是原生 CfSpeedtest.Server 进程，不能执行在线更新");
     }
 
