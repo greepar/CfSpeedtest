@@ -158,7 +158,7 @@ while (true)
     }
 }
 
-StartBackgroundUpdateCheck(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
+StartBackgroundUpdateCheck(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState);
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
@@ -405,7 +405,7 @@ static async Task PostReportWithRetryAsync(string serverUrl, string reportJson, 
     throw new InvalidOperationException($"Report failed after {maxAttempts} attempts: {lastError?.Message}", lastError);
 }
 
-static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
+static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, ClientTransportState transportState)
 {
     if (!await ClientUpdateLock.Semaphore.WaitAsync(0))
     {
@@ -417,12 +417,15 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
     string? stagingDir = null;
     try
     {
-        var resp = await httpClient.GetAsync($"{serverUrl}/api/client/update?version={Uri.EscapeDataString(currentVersion)}&platform={Uri.EscapeDataString(clientPlatform)}");
+        var resp = await transportState.HttpClient.GetAsync($"{serverUrl}/api/client/update?version={Uri.EscapeDataString(currentVersion)}&platform={Uri.EscapeDataString(clientPlatform)}");
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientUpdateInfo);
         if (result?.Success != true || result.Data is null)
+        {
+            Console.WriteLine($"Update check failed: {result?.Message ?? "服务器返回了无效响应"}");
             return;
+        }
 
         var info = result.Data;
         if (!info.Enabled)
@@ -446,8 +449,36 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
 
         downloadDir = Path.Combine(Path.GetTempPath(), $"cfspeedtest-update-download-{Guid.NewGuid():N}");
         Directory.CreateDirectory(downloadDir);
-        var tempFile = Path.Combine(downloadDir, Path.GetFileName(new Uri(info.DownloadUrl).AbsolutePath));
-        await DownloadUpdatePackageWithRetryAsync(httpClient, info.DownloadUrl, tempFile);
+        var downloadUrls = new List<string> { info.DownloadUrl };
+        if (!string.IsNullOrWhiteSpace(info.DirectDownloadUrl) &&
+            !string.Equals(info.DirectDownloadUrl, info.DownloadUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            downloadUrls.Add(info.DirectDownloadUrl);
+        }
+
+        var tempFile = Path.Combine(downloadDir, Path.GetFileName(new Uri(downloadUrls[0]).AbsolutePath));
+        using (var downloadClient = transportState.CreateHttpClient(TimeSpan.FromMinutes(5)))
+        {
+            Exception? downloadError = null;
+            var downloaded = false;
+            foreach (var url in downloadUrls)
+            {
+                try
+                {
+                    await DownloadUpdatePackageWithRetryAsync(downloadClient, url, tempFile);
+                    downloaded = true;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    downloadError = ex;
+                    Console.WriteLine($"Update download from {url} failed: {ex.Message}");
+                }
+            }
+
+            if (!downloaded)
+                throw downloadError ?? new InvalidOperationException("Update package download failed.");
+        }
         Console.WriteLine($"Update package downloaded to: {tempFile}");
 
         var currentExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
@@ -504,9 +535,9 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
     }
 }
 
-static void StartBackgroundUpdateCheck(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, HttpClient httpClient)
+static void StartBackgroundUpdateCheck(string serverUrl, string currentVersion, string clientPlatform, bool autoUpdate, bool isService, ClientTransportState transportState)
 {
-    _ = Task.Run(() => CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, httpClient));
+    _ = Task.Run(() => CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState));
 }
 
 static void RestartCurrentProcess(string currentExe, IReadOnlyList<string> args)
@@ -525,36 +556,113 @@ static void RestartCurrentProcess(string currentExe, IReadOnlyList<string> args)
 static async Task DownloadUpdatePackageWithRetryAsync(HttpClient httpClient, string downloadUrl, string tempFile)
 {
     const int MaxAttempts = 3;
-    var timeout = TimeSpan.FromMinutes(2);
+    var timeout = TimeSpan.FromMinutes(3);
+    string? lastReason = null;
 
     for (var attempt = 1; attempt <= MaxAttempts; attempt++)
     {
+        var isLast = attempt == MaxAttempts;
         try
         {
             TryDeleteFile(tempFile);
             Console.WriteLine($"Downloading update package... attempt {attempt}/{MaxAttempts}");
             using var cts = new CancellationTokenSource(timeout);
-            using var resp = await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
+            request.Headers.UserAgent.ParseAdd("CfSpeedtest-Client-Updater");
+            request.Headers.Accept.ParseAdd("application/octet-stream");
+            using var resp = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             resp.EnsureSuccessStatusCode();
-            await using var download = await resp.Content.ReadAsStreamAsync(cts.Token);
-            await using var file = File.Create(tempFile);
-            await download.CopyToAsync(file, cts.Token);
-            return;
+            var expectedLength = resp.Content.Headers.ContentLength;
+            Console.WriteLine($"Update response: status={(int)resp.StatusCode} length={expectedLength?.ToString() ?? "?"} encoding={string.Join(",", resp.Content.Headers.ContentEncoding)} type={resp.Content.Headers.ContentType}");
+            await using (var download = await resp.Content.ReadAsStreamAsync(cts.Token))
+            await using (var file = File.Create(tempFile))
+            {
+                await download.CopyToAsync(file, cts.Token);
+            }
+
+            if (IsValidUpdatePackage(tempFile, expectedLength, out var reason))
+            {
+                Console.WriteLine($"Update package verified: {new FileInfo(tempFile).Length} bytes");
+                return;
+            }
+
+            lastReason = reason;
+            Console.WriteLine($"Update package validation failed: {reason}");
         }
-        catch (OperationCanceledException) when (attempt < MaxAttempts)
+        catch (OperationCanceledException) when (!isLast)
         {
-            Console.WriteLine($"Update package download timed out after {timeout.TotalSeconds:F0}s. Retrying...");
+            lastReason = $"download timed out after {timeout.TotalSeconds:F0}s";
+            Console.WriteLine($"Update package {lastReason}. Retrying...");
         }
-        catch (Exception ex) when (attempt < MaxAttempts)
+        catch (Exception ex) when (!isLast)
         {
+            lastReason = ex.Message;
             Console.WriteLine($"Update package download failed: {ex.Message}. Retrying...");
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException($"Update package download failed: timed out after {timeout.TotalSeconds:F0}s");
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Update package download failed: {ex.Message}", ex);
         }
 
         TryDeleteFile(tempFile);
         await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, attempt * 5)));
     }
 
-    throw new TimeoutException($"Update package download failed after {MaxAttempts} attempts.");
+    throw new InvalidOperationException($"Update package download failed after {MaxAttempts} attempts: {lastReason}");
+}
+
+static bool IsValidUpdatePackage(string path, long? expectedLength, out string reason)
+{
+    reason = string.Empty;
+    if (!File.Exists(path))
+    {
+        reason = "downloaded file is missing";
+        return false;
+    }
+
+    var length = new FileInfo(path).Length;
+    if (expectedLength is > 0 && length != expectedLength.Value)
+    {
+        reason = $"length mismatch: got {length}, expected {expectedLength.Value}";
+        return false;
+    }
+
+    using (var stream = File.OpenRead(path))
+    {
+        var header = new byte[4];
+        var read = stream.Read(header, 0, header.Length);
+        if (read < 4 || header[0] != 0x50 || header[1] != 0x4B ||
+            !((header[2] == 0x03 && header[3] == 0x04) || (header[2] == 0x05 && header[3] == 0x06)))
+        {
+            stream.Position = 0;
+            var previewLength = (int)Math.Min(16, length);
+            var preview = new byte[previewLength];
+            var previewRead = stream.Read(preview, 0, preview.Length);
+            reason = $"not a zip (size={length}, first bytes={Convert.ToHexString(preview.AsSpan(0, previewRead))})";
+            return false;
+        }
+    }
+
+    try
+    {
+        using var archive = ZipFile.OpenRead(path);
+        if (archive.Entries.Count == 0)
+        {
+            reason = $"zip archive contains no entries (size={length})";
+            return false;
+        }
+    }
+    catch (Exception ex)
+    {
+        reason = $"invalid zip (size={length}): {ex.Message}";
+        return false;
+    }
+
+    return true;
 }
 
 static string DetectClientPlatform()
@@ -718,7 +826,7 @@ static Task StartHeartbeatLoopAsync(
                     if (result.Data.ForceCheckUpdate)
                     {
                         Console.WriteLine("Manual update trigger received. Checking update immediately...");
-                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState);
                     }
 
                     var nextIntervalSeconds = Math.Max(5, result.Data.HeartbeatIntervalSeconds);
@@ -810,7 +918,7 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
                     if (msg.ForceCheckUpdate)
                     {
                         Console.WriteLine("Manual update trigger received via WebSocket. Checking update immediately...");
-                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
+                        await CheckForUpdateAsync(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState);
                     }
                 }
             }
@@ -1767,9 +1875,12 @@ sealed class ClientTransportState : IDisposable
         }
     }
 
-    private HttpClient BuildHttpClient()
+    public HttpClient CreateHttpClient(TimeSpan timeout)
     {
-        var handler = new HttpClientHandler();
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        };
         if (string.Equals(_proxySettings.Mode, "system", StringComparison.OrdinalIgnoreCase))
         {
             handler.UseProxy = true;
@@ -1785,8 +1896,10 @@ sealed class ClientTransportState : IDisposable
             handler.Proxy = null;
         }
 
-        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        return new HttpClient(handler) { Timeout = timeout };
     }
+
+    private HttpClient BuildHttpClient() => CreateHttpClient(TimeSpan.FromSeconds(30));
 
     public void Dispose()
     {

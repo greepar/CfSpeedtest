@@ -100,6 +100,9 @@ public sealed class ServerUpdateService(
             DownloadUrl = config.ClientUpdateEnabled && hasUpdate && !string.IsNullOrWhiteSpace(downloadUrl)
                 ? ApplyProxy(config.ClientUpdateGhProxyPrefix, downloadUrl)
                 : null,
+            DirectDownloadUrl = config.ClientUpdateEnabled && hasUpdate && !string.IsNullOrWhiteSpace(downloadUrl)
+                ? downloadUrl
+                : null,
             PackageFileName = fileName,
             Message = !config.ClientUpdateEnabled
                 ? "客户端自动更新未启用"
