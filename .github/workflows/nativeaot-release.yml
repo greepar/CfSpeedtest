@@ -46,7 +46,7 @@ jobs:
   build-native:
     name: Build ${{ matrix.kind }} (${{ matrix.rid }})
     needs: build-web
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -54,10 +54,12 @@ jobs:
           - kind: Client
             project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: win-x64
+            runner: windows-latest
             archive_name: cfspeedtest-client-win-x64
           - kind: Client
             project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: win-arm64
+            runner: windows-latest
             archive_name: cfspeedtest-client-win-arm64
           - kind: Client
             project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
@@ -90,10 +92,12 @@ jobs:
           - kind: Server
             project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: win-x64
+            runner: windows-latest
             archive_name: cfspeedtest-server-win-x64
           - kind: Server
             project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: win-arm64
+            runner: windows-latest
             archive_name: cfspeedtest-server-win-arm64
           - kind: Server
             project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
@@ -146,25 +150,45 @@ jobs:
           -p:StripSymbols=true
           -p:SkipBuildWebUi=true
 
-      - name: Verify embedded WebUI
-        if: matrix.kind == 'Server'
+      - name: Verify embedded WebUI (Unix)
+        if: matrix.kind == 'Server' && runner.os != 'Windows'
         run: |
           binary="publish/${{ matrix.kind }}-${{ matrix.rid }}/CfSpeedtest.Server"
-          if [[ "${{ matrix.rid }}" == win-* ]]; then
-            binary="${binary}.exe"
-          fi
           strings "$binary" | grep -F "wwwroot/index.html"
 
-      - name: Remove debug symbols
+      - name: Verify embedded WebUI (Windows)
+        if: matrix.kind == 'Server' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "publish/${{ matrix.kind }}-${{ matrix.rid }}/CfSpeedtest.Server.exe"
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($binary))
+          if (-not $text.Contains("wwwroot/index.html")) { throw "WebUI not embedded in $binary" }
+
+      - name: Remove debug symbols (Unix)
+        if: runner.os != 'Windows'
         run: |
           find "publish/${{ matrix.kind }}-${{ matrix.rid }}" -type f -name "*.pdb" -delete || true
           find "publish/${{ matrix.kind }}-${{ matrix.rid }}" -type f -name "*.dbg" -delete || true
           find "publish/${{ matrix.kind }}-${{ matrix.rid }}" -type d -name "*.dSYM" -exec rm -rf {} + || true
 
-      - name: Create archive
+      - name: Remove debug symbols (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem "publish/${{ matrix.kind }}-${{ matrix.rid }}" -Recurse -File -Include *.pdb,*.dbg -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          Get-ChildItem "publish/${{ matrix.kind }}-${{ matrix.rid }}" -Recurse -Directory -Filter *.dSYM -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd "publish/${{ matrix.kind }}-${{ matrix.rid }}"
           zip -r "../../${{ matrix.archive_name }}.zip" .
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "publish/${{ matrix.kind }}-${{ matrix.rid }}/*" -DestinationPath "${{ matrix.archive_name }}.zip" -Force
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v4

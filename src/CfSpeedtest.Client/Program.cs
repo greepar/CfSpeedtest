@@ -1895,10 +1895,7 @@ sealed class ClientTransportState : IDisposable
 
     public HttpClient CreateHttpClient(TimeSpan timeout)
     {
-        var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-        };
+        var handler = new HttpClientHandler();
         if (string.Equals(_proxySettings.Mode, "system", StringComparison.OrdinalIgnoreCase))
         {
             handler.UseProxy = true;
