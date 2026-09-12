@@ -95,7 +95,6 @@ if (!string.IsNullOrWhiteSpace(currentClientId))
 }
 
 const int StartupRetryDelaySeconds = 5;
-StartBackgroundUpdateCheck(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
 
 // NativeAOT-safe JSON options using source generators
 var jsonOpts = new JsonSerializerOptions
@@ -158,6 +157,8 @@ while (true)
         await Task.Delay(TimeSpan.FromSeconds(StartupRetryDelaySeconds));
     }
 }
+
+StartBackgroundUpdateCheck(serverUrl, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient);
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
@@ -1429,82 +1430,111 @@ static async Task ApplyUpdateInPlaceAsync(string stagingDir, string targetDir)
 static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
 {
     var scriptPath = Path.Combine(Path.GetTempPath(), $"cfspeedtest-service-update-{Guid.NewGuid():N}.ps1");
-    var script = """
-        param(
-            [string]$ServiceName,
-            [string]$StagingDir,
-            [string]$TargetDir,
-            [string]$ScriptPath
-        )
-
+    var taskName = $"CfSpeedtestClientUpdate-{Guid.NewGuid():N}";
+    var script = $"$ServiceName = {PowerShellLiteral("CfSpeedtestClient")}\n" +
+                 $"$StagingDir = {PowerShellLiteral(stagingDir)}\n" +
+                 $"$TargetDir = {PowerShellLiteral(targetDir)}\n" +
+                 $"$ScriptPath = {PowerShellLiteral(scriptPath)}\n" +
+                 $"$TaskName = {PowerShellLiteral(taskName)}\n" +
+                 $"$PidToWait = {Environment.ProcessId}\n" +
+                 """
         $ErrorActionPreference = 'Stop'
-        Start-Sleep -Seconds 2
 
-        try { sc.exe stop $ServiceName | Out-Null } catch { }
+        $logDir = Join-Path $env:ProgramData 'CfSpeedtestClient'
+        $logPath = Join-Path $logDir 'update.log'
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
-        $deadline = (Get-Date).AddSeconds(60)
-        do {
-            Start-Sleep -Seconds 1
-            $status = sc.exe query $ServiceName | Out-String
-            if ($status -match 'STATE\s+:\s+\d+\s+STOPPED') { break }
-        } while ((Get-Date) -lt $deadline)
-
-        Get-ChildItem -LiteralPath $StagingDir -Recurse -File | ForEach-Object {
-            $relative = $_.FullName.Substring($StagingDir.Length).TrimStart('\', '/')
-            $destination = Join-Path $TargetDir $relative
-            $destinationDir = Split-Path -Parent $destination
-            if (-not (Test-Path -LiteralPath $destinationDir)) {
-                New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
-            }
-            Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+        function Write-UpdateLog([string]$Message) {
+            "$(Get-Date -Format o) $Message" | Out-File -LiteralPath $logPath -Append -Encoding utf8
         }
 
-        $nssmExe = Join-Path $TargetDir 'nssm\nssm.exe'
-        if (Test-Path -LiteralPath $nssmExe) {
-            $params = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($params)) {
-                if ($params -notmatch '(^|\s)--service-worker(\s|$)') {
-                    if ($params -match '(^|\s)--service(\s|$)') {
-                        $params = [regex]::Replace($params, '(^|\s)--service(\s|$)', '$1--service-worker$2', 1)
+        try {
+            Write-UpdateLog "Waiting for client process $PidToWait to exit"
+            Wait-Process -Id $PidToWait -ErrorAction SilentlyContinue
+
+            try { sc.exe stop $ServiceName | Out-Null } catch { }
+
+            $deadline = (Get-Date).AddSeconds(60)
+            do {
+                Start-Sleep -Seconds 1
+                $status = sc.exe query $ServiceName | Out-String
+                if ($status -match 'STATE\s+:\s+\d+\s+STOPPED') { break }
+            } while ((Get-Date) -lt $deadline)
+
+            Get-ChildItem -LiteralPath $StagingDir -Recurse -File | ForEach-Object {
+                $relative = $_.FullName.Substring($StagingDir.Length).TrimStart('\', '/')
+                $destination = Join-Path $TargetDir $relative
+                $destinationDir = Split-Path -Parent $destination
+                if (-not (Test-Path -LiteralPath $destinationDir)) {
+                    New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
+                }
+                Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
+            }
+
+            $nssmExe = Join-Path $TargetDir 'nssm\nssm.exe'
+            if (Test-Path -LiteralPath $nssmExe) {
+                $params = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($params)) {
+                    if ($params -notmatch '(^|\s)--service-worker(\s|$)') {
+                        if ($params -match '(^|\s)--service(\s|$)') {
+                            $params = [regex]::Replace($params, '(^|\s)--service(\s|$)', '$1--service-worker$2', 1)
+                        }
+                        else {
+                            $params = "$params --service-worker"
+                        }
+                        & $nssmExe set $ServiceName AppParameters $params | Out-Null
                     }
-                    else {
-                        $params = "$params --service-worker"
-                    }
-                    & $nssmExe set $ServiceName AppParameters $params | Out-Null
                 }
             }
-        }
 
-        Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-        sc.exe start $ServiceName | Out-Null
-        Start-Sleep -Seconds 3
-        Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+            sc.exe start $ServiceName | Out-Null
+            Write-UpdateLog 'Update installed and service start requested'
+        }
+        catch {
+            Write-UpdateLog "Update failed: $($_.Exception.Message)"
+            try { sc.exe start $ServiceName | Out-Null } catch { }
+        }
+        finally {
+            schtasks.exe /Delete /TN $TaskName /F | Out-Null
+            Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
+        }
         """;
 
     File.WriteAllText(scriptPath, script, Encoding.UTF8);
 
-    var psi = new ProcessStartInfo
+    var taskCommand = $"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\"";
+    var createTask = new ProcessStartInfo
     {
-        FileName = "powershell.exe",
+        FileName = "schtasks.exe",
         UseShellExecute = false,
         CreateNoWindow = true,
     };
-    psi.ArgumentList.Add("-NoProfile");
-    psi.ArgumentList.Add("-ExecutionPolicy");
-    psi.ArgumentList.Add("Bypass");
-    psi.ArgumentList.Add("-File");
-    psi.ArgumentList.Add(scriptPath);
-    psi.ArgumentList.Add("-ServiceName");
-    psi.ArgumentList.Add("CfSpeedtestClient");
-    psi.ArgumentList.Add("-StagingDir");
-    psi.ArgumentList.Add(stagingDir);
-    psi.ArgumentList.Add("-TargetDir");
-    psi.ArgumentList.Add(targetDir);
-    psi.ArgumentList.Add("-ScriptPath");
-    psi.ArgumentList.Add(scriptPath);
+    foreach (var argument in new[]
+             {
+                 "/Create", "/TN", taskName, "/SC", "ONSTART",
+                 "/RU", "SYSTEM", "/RL", "HIGHEST", "/TR", taskCommand, "/F"
+             })
+    {
+        createTask.ArgumentList.Add(argument);
+    }
 
-    Process.Start(psi);
+    using var createProcess = Process.Start(createTask) ?? throw new InvalidOperationException("Failed to create Windows update task.");
+    createProcess.WaitForExit();
+    if (createProcess.ExitCode != 0)
+        throw new InvalidOperationException($"Failed to create Windows update task (exit code {createProcess.ExitCode}).");
+
+    var runTask = new ProcessStartInfo("schtasks.exe") { UseShellExecute = false, CreateNoWindow = true };
+    runTask.ArgumentList.Add("/Run");
+    runTask.ArgumentList.Add("/TN");
+    runTask.ArgumentList.Add(taskName);
+    using var runProcess = Process.Start(runTask) ?? throw new InvalidOperationException("Failed to start Windows update task.");
+    runProcess.WaitForExit();
+    if (runProcess.ExitCode != 0)
+        throw new InvalidOperationException($"Failed to start Windows update task (exit code {runProcess.ExitCode}).");
 }
+
+static string PowerShellLiteral(string value) => "'" + value.Replace("'", "''") + "'";
 
 static void TryDeleteDirectory(string? path)
 {

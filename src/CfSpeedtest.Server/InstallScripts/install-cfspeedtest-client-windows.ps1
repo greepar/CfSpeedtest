@@ -89,8 +89,9 @@ function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath)
         Wait-ServiceDeleted -Name $Name
     }
 
-    Write-Log 'Killing any leftover CfSpeedtest.Client.exe processes...'
+    Write-Log 'Killing any leftover client processes from the target install path...'
     Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $ExePath, [StringComparison]::OrdinalIgnoreCase) } |
         ForEach-Object {
             Write-Log "Stopping leftover client process PID=$($_.ProcessId)..."
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
@@ -98,7 +99,8 @@ function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath)
 
     $deadline = (Get-Date).AddSeconds(30)
     do {
-        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue)
+        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $ExePath, [StringComparison]::OrdinalIgnoreCase) })
         if ($leftovers.Count -eq 0) { return }
         Start-Sleep -Seconds 1
     } while ((Get-Date) -lt $deadline)
@@ -173,6 +175,12 @@ Write-Log 'Installing/updating Windows Service...'
 & $nssmExe set $serviceName AppExit Default Restart | Out-Null
 & $nssmExe set $serviceName AppRestartDelay 5000 | Out-Null
 & $nssmExe set $serviceName ObjectName LocalSystem | Out-Null
+$logDir = Join-Path $env:ProgramData 'CfSpeedtestClient'
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+& $nssmExe set $serviceName AppStdout (Join-Path $logDir 'client.log') | Out-Null
+& $nssmExe set $serviceName AppStderr (Join-Path $logDir 'client-error.log') | Out-Null
+& $nssmExe set $serviceName AppRotateFiles 1 | Out-Null
+& $nssmExe set $serviceName AppRotateBytes 1048576 | Out-Null
 
 Write-Log 'Starting service...'
 $started = $false
