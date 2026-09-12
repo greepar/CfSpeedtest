@@ -1402,21 +1402,21 @@ static void TryUpdateServiceArguments(string serverUrl, string clientId, IspType
             var exePath = Path.Combine(installDir, "CfSpeedtest.Client.exe");
             if (File.Exists(nssmExe) && File.Exists(exePath))
             {
-                var args = $"--server \"{serverUrl}\" --client-id {clientId} --isp {isp} --name \"{clientName}\" --service-worker";
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = nssmExe,
-                    Arguments = $"set CfSpeedtestClient Application {exePath}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                })?.WaitForExit();
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = nssmExe,
-                    Arguments = $"set CfSpeedtestClient AppParameters {args}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                })?.WaitForExit();
+                var parameters = $"--server \"{serverUrl}\" --client-id {clientId} --isp {isp} --name \"{clientName}\" --service-worker";
+
+                var setApplication = new ProcessStartInfo(nssmExe) { UseShellExecute = false, CreateNoWindow = true };
+                setApplication.ArgumentList.Add("set");
+                setApplication.ArgumentList.Add("CfSpeedtestClient");
+                setApplication.ArgumentList.Add("Application");
+                setApplication.ArgumentList.Add(exePath);
+                Process.Start(setApplication)?.WaitForExit();
+
+                var setParameters = new ProcessStartInfo(nssmExe) { UseShellExecute = false, CreateNoWindow = true };
+                setParameters.ArgumentList.Add("set");
+                setParameters.ArgumentList.Add("CfSpeedtestClient");
+                setParameters.ArgumentList.Add("AppParameters");
+                setParameters.ArgumentList.Add(parameters);
+                Process.Start(setParameters)?.WaitForExit();
             }
             return;
         }
@@ -1557,11 +1557,13 @@ static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
 {
     var scriptPath = Path.Combine(Path.GetTempPath(), $"cfspeedtest-service-update-{Guid.NewGuid():N}.ps1");
     var taskName = $"CfSpeedtestClientUpdate-{Guid.NewGuid():N}";
+    var serviceArgs = string.Join(' ', Environment.GetCommandLineArgs().Skip(1).Select(QuoteArg));
     var script = $"$ServiceName = {PowerShellLiteral("CfSpeedtestClient")}\n" +
                  $"$StagingDir = {PowerShellLiteral(stagingDir)}\n" +
                  $"$TargetDir = {PowerShellLiteral(targetDir)}\n" +
                  $"$ScriptPath = {PowerShellLiteral(scriptPath)}\n" +
                  $"$TaskName = {PowerShellLiteral(taskName)}\n" +
+                 $"$ServiceArgs = {PowerShellLiteral(serviceArgs)}\n" +
                  $"$PidToWait = {Environment.ProcessId}\n" +
                  """
         $ErrorActionPreference = 'Stop'
@@ -1600,16 +1602,12 @@ static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
             $nssmExe = Join-Path $TargetDir 'nssm\nssm.exe'
             if (Test-Path -LiteralPath $nssmExe) {
                 $params = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
-                if (-not [string]::IsNullOrWhiteSpace($params)) {
-                    if ($params -notmatch '(^|\s)--service-worker(\s|$)') {
-                        if ($params -match '(^|\s)--service(\s|$)') {
-                            $params = [regex]::Replace($params, '(^|\s)--service(\s|$)', '$1--service-worker$2', 1)
-                        }
-                        else {
-                            $params = "$params --service-worker"
-                        }
-                        & $nssmExe set $ServiceName AppParameters $params | Out-Null
-                    }
+                if ([string]::IsNullOrWhiteSpace($params) -or $params -eq '-') {
+                    & $nssmExe set $ServiceName AppParameters $ServiceArgs | Out-Null
+                    Write-UpdateLog "Restored NSSM AppParameters from running client"
+                }
+                else {
+                    Write-UpdateLog "NSSM AppParameters preserved"
                 }
             }
 
