@@ -14,4 +14,4 @@ if [ -n "${CF_DISABLE_AUTO_UPDATE:-}" ]; then
   set -- "$@" --disable-auto-update
 fi
 
-exec dotnet /app/CfSpeedtest.Client.dll "$@"
+exec /app/CfSpeedtest.Client "$@"

@@ -8,18 +8,17 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   DOTNET_VERSION: "10.0.x"
   NODE_VERSION: "22"
-  PROJECT_PATH: "src/CfSpeedtest.Client/CfSpeedtest.Client.csproj"
-  SERVER_PROJECT_PATH: "src/CfSpeedtest.Server/CfSpeedtest.Server.csproj"
   WEB_PATH: "src/CfSpeedtest.Web"
 
 jobs:
   build-web:
     name: Build WebUI
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,138 +43,80 @@ jobs:
           path: src/CfSpeedtest.Server/wwwroot
           if-no-files-found: error
 
-  build-and-package:
-    name: Build Client (${{ matrix.rid }})
-    runs-on: ${{ matrix.runner }}
+  build-native:
+    name: Build ${{ matrix.kind }} (${{ matrix.rid }})
+    needs: build-web
+    runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-latest
-            rid: win-x86
-            archive_name: cfspeedtest-client-win-x86
-            archive_ext: zip
-          - runner: windows-latest
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: win-x64
             archive_name: cfspeedtest-client-win-x64
-            archive_ext: zip
-          - runner: windows-latest
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: win-arm64
             archive_name: cfspeedtest-client-win-arm64
-            archive_ext: zip
-          - runner: ubuntu-latest
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: linux-x64
             archive_name: cfspeedtest-client-linux-x64
-            archive_ext: zip
-          - runner: ubuntu-latest
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: linux-arm64
             archive_name: cfspeedtest-client-linux-arm64
-            archive_ext: zip
-          - runner: ubuntu-latest
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: linux-arm
             archive_name: cfspeedtest-client-linux-arm
-            archive_ext: zip
-          - runner: macos-14
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
+            rid: linux-musl-x64
+            archive_name: cfspeedtest-client-linux-musl-x64
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
+            rid: linux-musl-arm64
+            archive_name: cfspeedtest-client-linux-musl-arm64
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: osx-x64
             archive_name: cfspeedtest-client-osx-x64
-            archive_ext: zip
-          - runner: macos-14
+          - kind: Client
+            project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: osx-arm64
             archive_name: cfspeedtest-client-osx-arm64
-            archive_ext: zip
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Install Linux ARM64 cross-compilation tools
-        if: runner.os == 'Linux' && matrix.rid == 'linux-arm64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm lld gcc-aarch64-linux-gnu zlib1g-dev
-
-      - name: Install Linux ARM cross-compilation tools
-        if: runner.os == 'Linux' && matrix.rid == 'linux-arm'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm lld gcc-arm-linux-gnueabihf zlib1g-dev
-
-      - name: Restore dependencies
-        run: dotnet restore ${{ env.PROJECT_PATH }}
-
-      - name: Publish NativeAOT
-        run: >
-          dotnet publish ${{ env.PROJECT_PATH }}
-          -c Release
-          -r ${{ matrix.rid }}
-          --self-contained true
-          -o publish/${{ matrix.rid }}
-          /p:PublishSingleFile=true
-          /p:StripSymbols=true
-          ${{ runner.os == 'Linux' && '-p:LinkerFlavor=lld' || '' }}
-        env:
-          COMPlus_CrossCompiling: ${{ (matrix.rid == 'linux-arm64' || matrix.rid == 'linux-arm') && '1' || '0' }}
-
-      - name: Remove debug symbols (Windows)
-        if: runner.os == 'Windows'
-        run: Get-ChildItem -Path ./publish/${{ matrix.rid }} -Recurse -Include *.pdb | Remove-Item -Force
-        shell: pwsh
-
-      - name: Remove debug symbols (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          find ./publish/${{ matrix.rid }} -type f -name "*.pdb" -delete || true
-          find ./publish/${{ matrix.rid }} -type f -name "*.dbg" -delete || true
-          find ./publish/${{ matrix.rid }} -type d -name "*.dSYM" -exec rm -rf {} + || true
-        shell: bash
-
-      - name: Create zip archive (Windows)
-        if: runner.os == 'Windows'
-        run: Compress-Archive -Path ./publish/${{ matrix.rid }}/* -DestinationPath ./${{ matrix.archive_name }}.${{ matrix.archive_ext }}
-        shell: pwsh
-
-      - name: Create zip archive (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          cd publish/${{ matrix.rid }}
-          zip -r ../../${{ matrix.archive_name }}.${{ matrix.archive_ext }} .
-        shell: bash
-
-      - name: Upload packaged artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive_name }}
-          path: ${{ matrix.archive_name }}.${{ matrix.archive_ext }}
-
-  build-server:
-    name: Build Server (${{ matrix.rid }})
-    needs: build-web
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: windows-latest
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: win-x64
             archive_name: cfspeedtest-server-win-x64
-          - runner: windows-latest
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: win-arm64
             archive_name: cfspeedtest-server-win-arm64
-          - runner: ubuntu-latest
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: linux-x64
             archive_name: cfspeedtest-server-linux-x64
-          - runner: ubuntu-latest
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: linux-arm64
             archive_name: cfspeedtest-server-linux-arm64
-          - runner: macos-14
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
+            rid: linux-musl-x64
+            archive_name: cfspeedtest-server-linux-musl-x64
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
+            rid: linux-musl-arm64
+            archive_name: cfspeedtest-server-linux-musl-arm64
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: osx-x64
             archive_name: cfspeedtest-server-osx-x64
-          - runner: macos-14
+          - kind: Server
+            project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: osx-arm64
             archive_name: cfspeedtest-server-osx-arm64
 
@@ -189,127 +130,132 @@ jobs:
           name: cfspeedtest-webui
           path: src/CfSpeedtest.Server/wwwroot
 
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Install Linux ARM64 cross-compilation tools
-        if: runner.os == 'Linux' && matrix.rid == 'linux-arm64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm lld gcc-aarch64-linux-gnu zlib1g-dev
-
-      - name: Publish Server NativeAOT
+      - name: Publish NativeAOT with AotAnywhere
         run: >
-          dotnet publish ${{ env.SERVER_PROJECT_PATH }}
+          dotnet publish ${{ matrix.project }}
           -c Release
           -r ${{ matrix.rid }}
           --self-contained true
-          -o publish/server-${{ matrix.rid }}
-          -p:SkipBuildWebUi=true
+          -o publish/${{ matrix.kind }}-${{ matrix.rid }}
+          -p:PublishSingleFile=true
           -p:StripSymbols=true
-          ${{ runner.os == 'Linux' && '-p:LinkerFlavor=lld' || '' }}
-        env:
-          COMPlus_CrossCompiling: ${{ matrix.rid == 'linux-arm64' && '1' || '0' }}
+          -p:SkipBuildWebUi=true
 
       - name: Verify embedded WebUI
+        if: matrix.kind == 'Server'
         run: |
-          $binary = [System.IO.File]::ReadAllBytes("./publish/server-${{ matrix.rid }}/CfSpeedtest.Server.exe")
-          $binaryText = [System.Text.Encoding]::UTF8.GetString($binary)
-          if (-not $binaryText.Contains("wwwroot/index.html")) {
-            throw "Embedded WebUI was not found in the Server executable"
-          }
-        if: runner.os == 'Windows'
-        shell: pwsh
+          binary="publish/${{ matrix.kind }}-${{ matrix.rid }}/CfSpeedtest.Server"
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            binary="${binary}.exe"
+          fi
+          strings "$binary" | grep -F "wwwroot/index.html"
 
-      - name: Verify embedded WebUI
-        run: strings ./publish/server-${{ matrix.rid }}/CfSpeedtest.Server | grep -F "wwwroot/index.html"
-        if: runner.os != 'Windows'
-        shell: bash
-
-      - name: Remove debug symbols (Windows)
-        if: runner.os == 'Windows'
-        run: Get-ChildItem -Path ./publish/server-${{ matrix.rid }} -Recurse -Include *.pdb | Remove-Item -Force
-        shell: pwsh
-
-      - name: Remove debug symbols (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Remove debug symbols
         run: |
-          find ./publish/server-${{ matrix.rid }} -type f -name "*.pdb" -delete || true
-          find ./publish/server-${{ matrix.rid }} -type f -name "*.dbg" -delete || true
-          find ./publish/server-${{ matrix.rid }} -type d -name "*.dSYM" -exec rm -rf {} + || true
-        shell: bash
+          find "publish/${{ matrix.kind }}-${{ matrix.rid }}" -type f -name "*.pdb" -delete || true
+          find "publish/${{ matrix.kind }}-${{ matrix.rid }}" -type f -name "*.dbg" -delete || true
+          find "publish/${{ matrix.kind }}-${{ matrix.rid }}" -type d -name "*.dSYM" -exec rm -rf {} + || true
 
-      - name: Create Server archive (Windows)
-        if: runner.os == 'Windows'
-        run: Compress-Archive -Path ./publish/server-${{ matrix.rid }}/* -DestinationPath ./${{ matrix.archive_name }}.zip
-        shell: pwsh
-
-      - name: Create Server archive (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Create archive
         run: |
-          cd publish/server-${{ matrix.rid }}
-          zip -r ../../${{ matrix.archive_name }}.zip .
-        shell: bash
+          cd "publish/${{ matrix.kind }}-${{ matrix.rid }}"
+          zip -r "../../${{ matrix.archive_name }}.zip" .
 
-      - name: Upload Server artifact
+      - name: Upload packaged artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.archive_name }}
           path: ${{ matrix.archive_name }}.zip
+          if-no-files-found: error
 
-  build-musl-x64:
-    name: Build (linux-musl-x64)
+  publish-containers:
+    name: Publish NativeAOT container (${{ matrix.component }})
+    if: github.ref_type == 'tag'
+    needs: build-native
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: server
+            image: cfspeedtest-server
+            dockerfile: docker/server.Dockerfile
+          - component: client
+            image: cfspeedtest-client
+            dockerfile: docker/client.Dockerfile
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build inside Alpine container
-        run: >
-          docker run --rm
-          -v "$PWD:/workspace"
-          -w /workspace
-          mcr.microsoft.com/dotnet/sdk:10.0-alpine
-          sh -lc "apk add --no-cache bash git zip clang lld build-base zlib-dev openssl-dev icu-data-full && dotnet restore ${{ env.PROJECT_PATH }} -r linux-musl-x64 && dotnet publish ${{ env.PROJECT_PATH }} -c Release -r linux-musl-x64 --self-contained true -o publish/linux-musl-x64 /p:PublishSingleFile=true /p:StripSymbols=true -p:LinkerFlavor=lld && find ./publish/linux-musl-x64 -type f -name '*.pdb' -delete || true && find ./publish/linux-musl-x64 -type f -name '*.dbg' -delete || true && cd publish/linux-musl-x64 && zip -r ../../cfspeedtest-client-linux-musl-x64.zip ."
-
-      - name: Upload packaged artifact
-        uses: actions/upload-artifact@v4
+      - name: Download x64 NativeAOT artifact
+        uses: actions/download-artifact@v4
         with:
-          name: cfspeedtest-client-linux-musl-x64
-          path: cfspeedtest-client-linux-musl-x64.zip
+          name: cfspeedtest-${{ matrix.component }}-linux-musl-x64
+          path: artifacts
 
-  build-musl-arm64:
-    name: Build (linux-musl-arm64)
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build inside Alpine container
-        run: >
-          docker run --rm
-          -v "$PWD:/workspace"
-          -w /workspace
-          mcr.microsoft.com/dotnet/sdk:10.0-alpine
-          sh -lc "apk add --no-cache bash git zip clang lld build-base zlib-dev openssl-dev icu-data-full && dotnet restore ${{ env.PROJECT_PATH }} -r linux-musl-arm64 && dotnet publish ${{ env.PROJECT_PATH }} -c Release -r linux-musl-arm64 --self-contained true -o publish/linux-musl-arm64 /p:PublishSingleFile=true /p:StripSymbols=true -p:LinkerFlavor=lld && find ./publish/linux-musl-arm64 -type f -name '*.pdb' -delete || true && find ./publish/linux-musl-arm64 -type f -name '*.dbg' -delete || true && cd publish/linux-musl-arm64 && zip -r ../../cfspeedtest-client-linux-musl-arm64.zip ."
-
-      - name: Upload packaged artifact
-        uses: actions/upload-artifact@v4
+      - name: Download ARM64 NativeAOT artifact
+        uses: actions/download-artifact@v4
         with:
-          name: cfspeedtest-client-linux-musl-arm64
-          path: cfspeedtest-client-linux-musl-arm64.zip
+          name: cfspeedtest-${{ matrix.component }}-linux-musl-arm64
+          path: artifacts
+
+      - name: Prepare container build context
+        run: |
+          mkdir -p "container/${{ matrix.component }}-amd64" "container/${{ matrix.component }}-arm64"
+          unzip "artifacts/cfspeedtest-${{ matrix.component }}-linux-musl-x64.zip" -d "container/${{ matrix.component }}-amd64"
+          unzip "artifacts/cfspeedtest-${{ matrix.component }}-linux-musl-arm64.zip" -d "container/${{ matrix.component }}-arm64"
+          chmod +x "container/${{ matrix.component }}-amd64/CfSpeedtest.${{ matrix.component == 'server' && 'Server' || 'Client' }}"
+          chmod +x "container/${{ matrix.component }}-arm64/CfSpeedtest.${{ matrix.component == 'server' && 'Server' || 'Client' }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/greepar/${{ matrix.image }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}-native
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-native
 
   create-release:
     name: Create GitHub Release
     if: github.ref_type == 'tag'
     needs:
       - build-web
-      - build-and-package
-      - build-server
-      - build-musl-x64
-      - build-musl-arm64
+      - build-native
+      - publish-containers
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
