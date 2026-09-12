@@ -18,7 +18,7 @@ env:
 jobs:
   build-web:
     name: Build WebUI
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
   build-native:
     name: Build ${{ matrix.kind }} (${{ matrix.rid }})
     needs: build-web
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -129,11 +129,6 @@ jobs:
         with:
           name: cfspeedtest-webui
           path: src/CfSpeedtest.Server/wwwroot
-
-      - name: Select latest stable Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
