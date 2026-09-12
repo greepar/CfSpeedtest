@@ -161,6 +161,7 @@ export interface WebhookConfig {
   headers: WebhookHeader[];
   notifyClientOnline: boolean;
   notifyClientOffline: boolean;
+  offlineNotificationDelaySeconds: number;
   bodyTemplate: string;
 }
 
@@ -183,6 +184,10 @@ export interface ServerConfig {
   maxTestIpCount: number;
   crossTestEnabled: boolean;
   crossTestCandidateCount: number;
+  crossTestPassPolicy: "all" | "ratio";
+  crossTestMinPassRatePercent: number;
+  crossTestMaxPacketLossPercent: number;
+  crossTestMinValidReports: number;
   clientIntervalMinutes: number;
   historyRetentionDays: number;
   heartbeatIntervalSeconds: number;

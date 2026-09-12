@@ -12,25 +12,29 @@ public sealed class WebhookNotificationService(
     IHttpClientFactory httpClientFactory,
     ILogger<WebhookNotificationService> logger) : BackgroundService
 {
-    private readonly ConcurrentDictionary<string, bool> _onlineStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ClientNotificationState> _clientStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Channel<WebhookNotification> _queue = Channel.CreateUnbounded<WebhookNotification>();
 
     public void ClientSeen(ClientInfo client)
     {
         while (true)
         {
-            if (_onlineStates.TryAdd(client.ClientId, true))
+            if (_clientStates.TryAdd(client.ClientId, new ClientNotificationState(true, null)))
             {
                 QueueClientEvent(client, true);
                 return;
             }
 
-            if (!_onlineStates.TryGetValue(client.ClientId, out var wasOnline) || wasOnline)
+            if (!_clientStates.TryGetValue(client.ClientId, out var state))
+                continue;
+            if (state.IsOnline && state.OfflineDetectedAtUtc is null)
                 return;
 
-            if (_onlineStates.TryUpdate(client.ClientId, true, false))
+            var recoveredAfterNotification = !state.IsOnline;
+            if (_clientStates.TryUpdate(client.ClientId, new ClientNotificationState(true, null), state))
             {
-                QueueClientEvent(client, true);
+                if (recoveredAfterNotification)
+                    QueueClientEvent(client, true);
                 return;
             }
         }
@@ -123,7 +127,7 @@ public sealed class WebhookNotificationService(
         var now = DateTime.UtcNow;
         foreach (var client in store.GetClients())
         {
-            _onlineStates[client.ClientId] = IsOnline(client, config, now);
+            _clientStates[client.ClientId] = new ClientNotificationState(IsOnline(client, config, now), null);
         }
     }
 
@@ -142,21 +146,42 @@ public sealed class WebhookNotificationService(
                 if (IsOnline(client, config, now))
                     continue;
 
-                if (_onlineStates.TryUpdate(client.ClientId, false, true))
+                while (true)
                 {
-                    client.IsOnline = false;
-                    QueueClientEvent(client, false);
-                }
-                else
-                {
-                    _onlineStates.TryAdd(client.ClientId, false);
+                    if (!_clientStates.TryGetValue(client.ClientId, out var state))
+                    {
+                        _clientStates.TryAdd(client.ClientId, new ClientNotificationState(false, null));
+                        break;
+                    }
+                    if (!state.IsOnline)
+                        break;
+
+                    if (state.OfflineDetectedAtUtc is null)
+                    {
+                        if (_clientStates.TryUpdate(client.ClientId, state with { OfflineDetectedAtUtc = now }, state))
+                            break;
+                        continue;
+                    }
+
+                    var delay = TimeSpan.FromSeconds(Math.Clamp(config.Webhook.OfflineNotificationDelaySeconds, 0, 86400));
+                    if (now - state.OfflineDetectedAtUtc.Value < delay)
+                        break;
+                    if (!config.Webhook.Enabled || !config.Webhook.NotifyClientOffline)
+                        break;
+
+                    if (_clientStates.TryUpdate(client.ClientId, new ClientNotificationState(false, null), state))
+                    {
+                        client.IsOnline = false;
+                        QueueClientEvent(client, false);
+                        break;
+                    }
                 }
             }
 
-            foreach (var clientId in _onlineStates.Keys)
+            foreach (var clientId in _clientStates.Keys)
             {
                 if (!clientIds.Contains(clientId))
-                    _onlineStates.TryRemove(clientId, out _);
+                    _clientStates.TryRemove(clientId, out _);
             }
         }
     }
@@ -272,4 +297,6 @@ public sealed class WebhookNotificationService(
         var serialized = JsonSerializer.Serialize(value, AppJsonContext.Default.String);
         return serialized[1..^1];
     }
+
+    private sealed record ClientNotificationState(bool IsOnline, DateTime? OfflineDetectedAtUtc);
 }

@@ -813,6 +813,15 @@ app.MapGet("/api/config", (DataStore store) =>
 // ============================================================
 app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 {
+    config.CrossTestPassPolicy = (config.CrossTestPassPolicy ?? string.Empty).Trim().ToLowerInvariant();
+    if (config.CrossTestPassPolicy is not ("all" or "ratio"))
+        return ApiResponse<string>.Fail("交叉测速通过策略必须是 all 或 ratio");
+    if (config.CrossTestMinPassRatePercent is <= 0 or > 100)
+        return ApiResponse<string>.Fail("交叉测速最低通过比例必须在 0 到 100 之间");
+    if (config.CrossTestMaxPacketLossPercent is < 0 or > 100)
+        return ApiResponse<string>.Fail("交叉测速最大丢包率必须在 0 到 100 之间");
+    if (config.CrossTestMinValidReports is < 1 or > 100)
+        return ApiResponse<string>.Fail("交叉测速最低有效节点数必须在 1 到 100 之间");
     if (config.WebUiAuth.MaxFailedLoginAttempts is < 1 or > 100)
         return ApiResponse<string>.Fail("登录失败次数阈值必须在 1 到 100 之间");
     if (config.WebUiAuth.LoginLockoutMinutes is < 1 or > 1440)
@@ -831,6 +840,8 @@ app.MapPost("/api/notifications/config", (WebhookConfig config, DataStore store)
 {
     if (config.Enabled && string.IsNullOrWhiteSpace(config.Url))
         return ApiResponse<string>.Fail("启用 Webhook 时必须填写 URL");
+    if (config.OfflineNotificationDelaySeconds is < 0 or > 86400)
+        return ApiResponse<string>.Fail("离线通知延迟必须在 0 到 86400 秒之间");
 
     if (!string.IsNullOrWhiteSpace(config.Url) &&
         (!Uri.TryCreate(config.Url, UriKind.Absolute, out var uri) ||

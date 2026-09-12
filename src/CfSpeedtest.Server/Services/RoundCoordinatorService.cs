@@ -421,8 +421,8 @@ public class RoundCoordinatorService : BackgroundService
         var crossReports = state.Phase == RoundPhase.CrossTest
             ? GetRoundReports(state.Isp, state.CrossTaskId)
             : [];
-        var useCrossReports = crossReports.Count > 0;
-        var sourceReports = useCrossReports
+        var isCrossTestRound = state.Phase == RoundPhase.CrossTest;
+        var sourceReports = isCrossTestRound
             ? initialReports.Concat(crossReports).ToList()
             : initialReports;
 
@@ -445,10 +445,20 @@ public class RoundCoordinatorService : BackgroundService
         }
 
         var candidateSet = state.CrossTestIps.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var allRoundResults = useCrossReports
-            ? BuildAggregatedResults(sourceReports
-                .SelectMany(h => h.Results)
-                .Where(r => candidateSet.Count == 0 || candidateSet.Contains(r.IpAddress)))
+        var validatedCrossResults = isCrossTestRound
+            ? GetValidatedCrossResults(state, initialReports, crossReports, config)
+            : [];
+        var validatedCrossCandidates = validatedCrossResults.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (isCrossTestRound && validatedCrossCandidates.Count < candidateSet.Count)
+        {
+            _logger.LogInformation(
+                "Cross-test rejected {RejectedCount}/{CandidateCount} candidates for {Isp} because at least one target client reported missing, unreachable, high-loss, or below-threshold results",
+                candidateSet.Count - validatedCrossCandidates.Count,
+                candidateSet.Count,
+                state.IspKey);
+        }
+        var allRoundResults = isCrossTestRound
+            ? BuildMedianAggregatedResults(validatedCrossResults)
             : sourceReports
                 .SelectMany(h => h.Results)
                 .OrderByDescending(r => r.Score)
@@ -478,7 +488,7 @@ public class RoundCoordinatorService : BackgroundService
             await _ipPool.RefreshFromApiAsync(state.IspKey);
         }
 
-        await _dns.UpdateDnsAsync(state.Isp, topResults);
+        await _dns.UpdateDnsAsync(state.Isp, topResults, allowHistoryFallback: !isCrossTestRound);
 
         lock (_lock)
         {
@@ -489,7 +499,7 @@ public class RoundCoordinatorService : BackgroundService
         _logger.LogInformation(
             "Round finalized for {Isp}: task={TaskId}, phase={Phase}, assigned={Assigned}, reported={Reported}, crossReports={CrossReports}, top={TopCount}, removed={Removed}",
             state.IspKey,
-            useCrossReports ? state.CrossTaskId : state.TaskId,
+            isCrossTestRound ? state.CrossTaskId : state.TaskId,
             state.Phase,
             state.Phase == RoundPhase.CrossTest ? CountCrossTargetClients(state) : CountInitialTargetClients(state),
             state.Phase == RoundPhase.CrossTest ? state.CrossReportedClients.Count : state.ReportedClients.Count,
@@ -497,7 +507,7 @@ public class RoundCoordinatorService : BackgroundService
             topResults.Count,
             removed);
 
-        return useCrossReports
+        return isCrossTestRound
             ? $"cross-test round finalized: kept top {topResults.Count}, removed {removed} IPs, source refresh triggered"
             : $"round finalized: kept top {topResults.Count}, removed {removed} IPs, source refresh triggered";
     }
@@ -605,28 +615,93 @@ public class RoundCoordinatorService : BackgroundService
             .ToList();
     }
 
-    private static List<IpTestResult> BuildAggregatedResults(IEnumerable<IpTestResult> results)
+    private static List<IpTestResult> BuildMedianAggregatedResults(
+        Dictionary<string, List<IpTestResult>> resultsByIp)
     {
-        return results
-            .Where(r => !string.IsNullOrWhiteSpace(r.IpAddress))
-            .GroupBy(r => r.IpAddress, StringComparer.OrdinalIgnoreCase)
-            .Select(g =>
+        return resultsByIp
+            .Select(pair =>
             {
-                var items = g.ToList();
+                var items = pair.Value;
                 return new IpTestResult
                 {
-                    IpAddress = g.Key,
-                    DownloadSpeedKBps = items.Average(r => r.DownloadSpeedKBps),
-                    AvgLatencyMs = items.Average(r => r.AvgLatencyMs),
+                    IpAddress = pair.Key,
+                    DownloadSpeedKBps = Median(items.Select(r => r.DownloadSpeedKBps)),
+                    AvgLatencyMs = Median(items.Select(r => r.AvgLatencyMs)),
                     MinLatencyMs = items.Min(r => r.MinLatencyMs),
-                    PacketLossRate = items.Average(r => r.PacketLossRate),
+                    PacketLossRate = Median(items.Select(r => r.PacketLossRate)),
                     TcpSuccessCount = items.Sum(r => r.TcpSuccessCount),
                     TcpTotalCount = items.Sum(r => r.TcpTotalCount),
-                    Score = items.Average(r => r.Score),
+                    Score = Median(items.Select(r => r.Score)),
                 };
             })
             .OrderByDescending(r => r.Score)
             .ToList();
+    }
+
+    private static Dictionary<string, List<IpTestResult>> GetValidatedCrossResults(
+        RoundState state,
+        List<TestHistory> initialReports,
+        List<TestHistory> crossReports,
+        ServerConfig config)
+    {
+        var initialResultsByClient = BuildResultsByClient(initialReports);
+        var crossResultsByClient = BuildResultsByClient(crossReports);
+        var validated = new Dictionary<string, List<IpTestResult>>(StringComparer.OrdinalIgnoreCase);
+        var expectedClientCount = state.CrossAssignedClients.Count;
+        var maxPacketLossRate = config.CrossTestMaxPacketLossPercent / 100.0;
+        var usePassRatio = string.Equals(config.CrossTestPassPolicy, "ratio", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var candidateIp in state.CrossTestIps)
+        {
+            var passingResults = new List<IpTestResult>();
+            foreach (var clientId in state.CrossAssignedClients)
+            {
+                IpTestResult? result = null;
+                if (crossResultsByClient.TryGetValue(clientId, out var crossResults))
+                    crossResults.TryGetValue(candidateIp, out result);
+                if (result is null && initialResultsByClient.TryGetValue(clientId, out var initialResults))
+                    initialResults.TryGetValue(candidateIp, out result);
+
+                if (result is not null &&
+                    result.TcpSuccessCount > 0 &&
+                    result.PacketLossRate <= maxPacketLossRate &&
+                    result.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+                    passingResults.Add(result);
+            }
+
+            var enoughReports = passingResults.Count >= config.CrossTestMinValidReports;
+            var passRate = expectedClientCount == 0 ? 0 : passingResults.Count * 100.0 / expectedClientCount;
+            var policyPassed = usePassRatio
+                ? passRate >= config.CrossTestMinPassRatePercent
+                : passingResults.Count == expectedClientCount;
+            if (enoughReports && policyPassed)
+                validated[candidateIp] = passingResults;
+        }
+
+        return validated;
+    }
+
+    private static double Median(IEnumerable<double> values)
+    {
+        var sorted = values.Order().ToArray();
+        if (sorted.Length == 0)
+            return 0;
+        var middle = sorted.Length / 2;
+        return sorted.Length % 2 == 0
+            ? (sorted[middle - 1] + sorted[middle]) / 2.0
+            : sorted[middle];
+    }
+
+    private static Dictionary<string, Dictionary<string, IpTestResult>> BuildResultsByClient(IEnumerable<TestHistory> reports)
+    {
+        return reports
+            .GroupBy(report => report.ClientId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.SelectMany(report => report.Results)
+                    .GroupBy(result => result.IpAddress, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(resultGroup => resultGroup.Key, resultGroup => resultGroup.Last(), StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
     }
 
     private static int CountInitialTargetClients(RoundState state)

@@ -210,6 +210,23 @@ export function NotificationsPage() {
               }
             />
           </div>
+          <Field
+            label="离线通知延迟（秒）"
+            hint="检测到客户端离线后继续等待；等待期间恢复连接则取消通知。设置为 0 表示检测到离线后立即通知。"
+          >
+            <Input
+              type="number"
+              min="0"
+              max="86400"
+              value={config.offlineNotificationDelaySeconds ?? 60}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  offlineNotificationDelaySeconds: Number(e.target.value),
+                })
+              }
+            />
+          </Field>
           <div className="space-y-2">
             <div className="flex flex-wrap items-end justify-between gap-2">
               <div>

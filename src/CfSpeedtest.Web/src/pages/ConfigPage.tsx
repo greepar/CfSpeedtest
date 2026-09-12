@@ -144,11 +144,6 @@ export function ConfigPage() {
             onChange={(v) => set("maxTestIpCount", v)}
           />
           <Num
-            label="交叉测试候选 IP"
-            value={cfg.crossTestCandidateCount ?? 0}
-            onChange={(v) => set("crossTestCandidateCount", v)}
-          />
-          <Num
             label="客户端间隔（分钟）"
             value={cfg.clientIntervalMinutes}
             onChange={(v) => set("clientIntervalMinutes", v)}
@@ -172,6 +167,54 @@ export function ConfigPage() {
             label="下载限速 KB/s（0不限）"
             value={cfg.maxDownloadSpeedKBps}
             onChange={(v) => set("maxDownloadSpeedKBps", v)}
+          />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="交叉测速策略"
+          desc="先做多节点可用性硬门槛，再用中位数聚合通过节点的测速指标"
+        />
+        <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <Toggle
+            label="启用同运营商交叉测速"
+            checked={!!cfg.crossTestEnabled}
+            onChange={(v) => set("crossTestEnabled", v)}
+          />
+          <Num
+            label="候选 IP 数量"
+            value={cfg.crossTestCandidateCount ?? 10}
+            onChange={(v) => set("crossTestCandidateCount", v)}
+          />
+          <Field
+            label="通过策略"
+            hint="全部节点最安全；按比例适合节点较多且允许个别节点异常"
+          >
+            <Select
+              value={cfg.crossTestPassPolicy ?? "all"}
+              onChange={(e) =>
+                set("crossTestPassPolicy", e.target.value as "all" | "ratio")
+              }
+            >
+              <option value="all">全部节点通过</option>
+              <option value="ratio">按通过比例</option>
+            </Select>
+          </Field>
+          <Num
+            label="最低通过比例（%）"
+            value={cfg.crossTestMinPassRatePercent ?? 80}
+            onChange={(v) => set("crossTestMinPassRatePercent", v)}
+          />
+          <Num
+            label="最大允许丢包率（%）"
+            value={cfg.crossTestMaxPacketLossPercent ?? 20}
+            onChange={(v) => set("crossTestMaxPacketLossPercent", v)}
+          />
+          <Num
+            label="最低有效节点数"
+            value={cfg.crossTestMinValidReports ?? 2}
+            onChange={(v) => set("crossTestMinValidReports", v)}
           />
         </CardBody>
       </Card>
@@ -242,11 +285,6 @@ export function ConfigPage() {
             label="测速后自动清理 IP 池"
             checked={cfg.autoCleanupEnabled}
             onChange={(v) => set("autoCleanupEnabled", v)}
-          />
-          <Toggle
-            label="启用同运营商交叉测试"
-            checked={!!cfg.crossTestEnabled}
-            onChange={(v) => set("crossTestEnabled", v)}
           />
           <Toggle
             label="启用客户端更新"

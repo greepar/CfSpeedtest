@@ -484,6 +484,7 @@ public class WebhookConfig
     public List<WebhookHeader> Headers { get; set; } = [];
     public bool NotifyClientOnline { get; set; } = true;
     public bool NotifyClientOffline { get; set; } = true;
+    public int OfflineNotificationDelaySeconds { get; set; } = 60;
     public string BodyTemplate { get; set; } = """
         {
           "text": "{{message}}\n事件：{{eventType}}\n发生时间：{{occurredAtUtc}}\n客户端 ID：{{clientId}}\n客户端名称：{{clientName}}\n运营商编号：{{isp}}\n运营商：{{ispName}}\n在线状态：{{online}}\n最后心跳：{{lastSeenAtUtc}}\n客户端版本：{{version}}\n客户端平台：{{platform}}"
@@ -632,6 +633,18 @@ public class ServerConfig
 
     /// <summary>交叉复测候选 IP 数量，0 表示使用 TopN * 2</summary>
     public int CrossTestCandidateCount { get; set; } = 10;
+
+    /// <summary>交叉复测通过策略：all 表示全部节点通过，ratio 表示按比例通过</summary>
+    public string CrossTestPassPolicy { get; set; } = "all";
+
+    /// <summary>按比例通过时要求的最低通过百分比</summary>
+    public double CrossTestMinPassRatePercent { get; set; } = 80;
+
+    /// <summary>交叉复测允许的最大丢包百分比</summary>
+    public double CrossTestMaxPacketLossPercent { get; set; } = 20;
+
+    /// <summary>一个候选至少需要多少个节点给出合格结果</summary>
+    public int CrossTestMinValidReports { get; set; } = 2;
 
     /// <summary>客户端轮询间隔(分钟)</summary>
     public int ClientIntervalMinutes { get; set; } = 60;

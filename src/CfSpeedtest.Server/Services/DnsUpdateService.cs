@@ -101,7 +101,7 @@ public class DnsUpdateService
     /// <summary>
     /// 根据测速结果更新DNS记录（客户端报告时自动触发）
     /// </summary>
-    public async Task UpdateDnsAsync(IspType isp, List<IpTestResult> bestResults)
+    public async Task UpdateDnsAsync(IspType isp, List<IpTestResult> bestResults, bool allowHistoryFallback = true)
     {
         var config = _store.GetConfig();
         var hwConfig = config.HuaweiDns;
@@ -110,10 +110,17 @@ public class DnsUpdateService
         var aggregatedResults = SelectDnsCandidates(bestResults, config.TopN, config.MinDownloadSpeedKBps);
         var usingFallback = aggregatedResults.Count > 0 && aggregatedResults.All(r => r.DownloadSpeedKBps < config.MinDownloadSpeedKBps);
 
-        if (aggregatedResults.Count == 0)
+        if (aggregatedResults.Count == 0 && allowHistoryFallback)
         {
             aggregatedResults = AggregateLatestResultsForIsp(isp, config.TopN);
             usingFallback = aggregatedResults.Count > 0 && aggregatedResults.All(r => r.DownloadSpeedKBps < config.MinDownloadSpeedKBps);
+        }
+
+        if (aggregatedResults.Count == 0 && !allowHistoryFallback)
+        {
+            UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false, "交叉复测没有全节点可用的 IP，保留当前 DNS 记录");
+            _logger.LogWarning("No cross-test candidate passed every target client for {Isp}; keeping the current DNS records", isp);
+            return;
         }
 
         if (!hwConfig.Enabled)
