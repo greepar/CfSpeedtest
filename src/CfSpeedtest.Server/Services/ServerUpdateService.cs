@@ -88,6 +88,12 @@ public sealed class ServerUpdateService(
         var downloadUrl = asset.ValueKind == JsonValueKind.Object && asset.TryGetProperty("browser_download_url", out var urlProperty)
             ? urlProperty.GetString()
             : null;
+        var digest = asset.ValueKind == JsonValueKind.Object && asset.TryGetProperty("digest", out var digestProperty)
+            ? digestProperty.GetString()
+            : null;
+        var expectedSha256 = digest is not null && digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
+            ? digest["sha256:".Length..]
+            : null;
         var hasUpdate = latestVersion > currentVersion;
 
         return new ClientUpdateInfo
@@ -102,6 +108,9 @@ public sealed class ServerUpdateService(
                 : null,
             DirectDownloadUrl = config.ClientUpdateEnabled && hasUpdate && !string.IsNullOrWhiteSpace(downloadUrl)
                 ? downloadUrl
+                : null,
+            ExpectedSha256 = config.ClientUpdateEnabled && hasUpdate && !string.IsNullOrWhiteSpace(downloadUrl)
+                ? expectedSha256
                 : null,
             PackageFileName = fileName,
             Message = !config.ClientUpdateEnabled

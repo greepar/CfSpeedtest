@@ -244,6 +244,7 @@ public class ClientUpdateInfo
     public bool HasUpdate { get; set; }
     public string? DownloadUrl { get; set; }
     public string? DirectDownloadUrl { get; set; }
+    public string? ExpectedSha256 { get; set; }
     public string? PackageFileName { get; set; }
     public string? Message { get; set; }
 }

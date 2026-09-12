@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Net.WebSockets;
 using System.Net;
 using System.Net.Security;
@@ -465,7 +466,7 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
             {
                 try
                 {
-                    await DownloadUpdatePackageWithRetryAsync(downloadClient, url, tempFile);
+                    await DownloadUpdatePackageWithRetryAsync(downloadClient, url, tempFile, info.ExpectedSha256);
                     downloaded = true;
                     break;
                 }
@@ -553,7 +554,7 @@ static void RestartCurrentProcess(string currentExe, IReadOnlyList<string> args)
     Environment.Exit(0);
 }
 
-static async Task DownloadUpdatePackageWithRetryAsync(HttpClient httpClient, string downloadUrl, string tempFile)
+static async Task DownloadUpdatePackageWithRetryAsync(HttpClient httpClient, string downloadUrl, string tempFile, string? expectedSha256)
 {
     const int MaxAttempts = 3;
     var timeout = TimeSpan.FromMinutes(3);
@@ -580,7 +581,7 @@ static async Task DownloadUpdatePackageWithRetryAsync(HttpClient httpClient, str
                 await download.CopyToAsync(file, cts.Token);
             }
 
-            if (IsValidUpdatePackage(tempFile, expectedLength, out var reason))
+            if (IsValidUpdatePackage(tempFile, expectedLength, expectedSha256, out var reason))
             {
                 Console.WriteLine($"Update package verified: {new FileInfo(tempFile).Length} bytes");
                 return;
@@ -615,7 +616,7 @@ static async Task DownloadUpdatePackageWithRetryAsync(HttpClient httpClient, str
     throw new InvalidOperationException($"Update package download failed after {MaxAttempts} attempts: {lastReason}");
 }
 
-static bool IsValidUpdatePackage(string path, long? expectedLength, out string reason)
+static bool IsValidUpdatePackage(string path, long? expectedLength, string? expectedSha256, out string reason)
 {
     reason = string.Empty;
     if (!File.Exists(path))
@@ -647,6 +648,17 @@ static bool IsValidUpdatePackage(string path, long? expectedLength, out string r
         }
     }
 
+    if (!string.IsNullOrWhiteSpace(expectedSha256))
+    {
+        using var hashStream = File.OpenRead(path);
+        var actualSha256 = Convert.ToHexString(SHA256.HashData(hashStream));
+        if (!actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"sha256 mismatch: got {actualSha256}, expected {expectedSha256.ToUpperInvariant()}";
+            return false;
+        }
+    }
+
     try
     {
         using var archive = ZipFile.OpenRead(path);
@@ -654,6 +666,12 @@ static bool IsValidUpdatePackage(string path, long? expectedLength, out string r
         {
             reason = $"zip archive contains no entries (size={length})";
             return false;
+        }
+
+        foreach (var entry in archive.Entries)
+        {
+            using var entryStream = entry.Open();
+            entryStream.CopyTo(Stream.Null);
         }
     }
     catch (Exception ex)
