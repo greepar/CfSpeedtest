@@ -19,6 +19,8 @@ using CfSpeedtest.Shared;
 //  Cloudflare IP 测速客户端 (NativeAOT Compatible)
 // ============================================================
 
+Console.OutputEncoding = Encoding.UTF8;
+
 if (args.Length == 0 || HasFlag(args, "help") || HasFlag(args, "h") || HasFlag(args, "?"))
 {
     PrintHelp();
@@ -141,11 +143,7 @@ while (true)
             ? regResult.Data.HeartbeatIntervalSeconds
             : heartbeatIntervalSeconds;
         currentClientId = clientId;
-        ApplyAuthoritativeClientMetadata(serverUrl, currentClientId, isService, runtimeProfile, proxySettings, transportState, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName, regResult.Data.EffectiveProxyMode, regResult.Data.EffectiveProxyUrl);
-        if (ShouldBackwriteServiceArguments(isService) && !string.IsNullOrWhiteSpace(currentClientId))
-        {
-            TryUpdateServiceArguments(serverUrl, currentClientId, runtimeProfile.Isp, runtimeProfile.Name);
-        }
+        ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, regResult.Data.EffectiveIsp, regResult.Data.EffectiveName, regResult.Data.EffectiveProxyMode, regResult.Data.EffectiveProxyUrl);
         Console.WriteLine($"Registered as: {clientId}");
         runtimeState.AppendLog($"Registered as {clientId}");
         break;
@@ -836,7 +834,7 @@ static Task StartHeartbeatLoopAsync(
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
                     heartbeatSucceeded = true;
-                    ApplyAuthoritativeClientMetadata(serverUrl, clientId, isService, runtimeProfile, proxySettings, transportState, result.Data.EffectiveIsp, result.Data.EffectiveName, result.Data.EffectiveProxyMode, result.Data.EffectiveProxyUrl);
+                    ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, result.Data.EffectiveIsp, result.Data.EffectiveName, result.Data.EffectiveProxyMode, result.Data.EffectiveProxyUrl);
                     if (result.Data.ForceFetchTask && immediateFetchSignal.CurrentCount == 0)
                     {
                         immediateFetchSignal.Release();
@@ -929,7 +927,7 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
                 var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
                 if (msg is not null)
                 {
-                    ApplyAuthoritativeClientMetadata(serverUrl, clientId, isService, runtimeProfile, proxySettings, transportState, msg.EffectiveIsp, msg.EffectiveName, msg.EffectiveProxyMode, msg.EffectiveProxyUrl);
+                    ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, msg.EffectiveIsp, msg.EffectiveName, msg.EffectiveProxyMode, msg.EffectiveProxyUrl);
                     intervalSeconds = Math.Max(5, msg.HeartbeatIntervalSeconds > 0 ? msg.HeartbeatIntervalSeconds : intervalSeconds);
                     if ((msg.ForceFetchTask || string.Equals(msg.Type, "trigger-test", StringComparison.OrdinalIgnoreCase)) && immediateFetchSignal.CurrentCount == 0)
                         immediateFetchSignal.Release();
@@ -999,7 +997,7 @@ static string BuildWebSocketUrl(string serverUrl, string clientId, IspType isp)
     return $"{scheme}://{baseUri.Authority}/api/client/ws?clientId={Uri.EscapeDataString(clientId)}&isp={Uri.EscapeDataString(isp.ToString())}";
 }
 
-static void ApplyAuthoritativeClientMetadata(string serverUrl, string clientId, bool isService, ClientRuntimeProfile runtimeProfile, ClientProxySettings proxySettings, ClientTransportState transportState, IspType effectiveIsp, string? effectiveName, string? effectiveProxyMode, string? effectiveProxyUrl)
+static void ApplyAuthoritativeClientMetadata(ClientRuntimeProfile runtimeProfile, ClientProxySettings proxySettings, ClientTransportState transportState, IspType effectiveIsp, string? effectiveName, string? effectiveProxyMode, string? effectiveProxyUrl)
 {
     var metadataChanged = false;
     if (!string.IsNullOrWhiteSpace(effectiveName))
@@ -1008,10 +1006,6 @@ static void ApplyAuthoritativeClientMetadata(string serverUrl, string clientId, 
         if (metadataChanged)
         {
             Console.WriteLine($"Server metadata updated: ISP={runtimeProfile.Isp}, Name={runtimeProfile.Name}");
-            if (ShouldBackwriteServiceArguments(isService) && !string.IsNullOrWhiteSpace(clientId))
-            {
-                TryUpdateServiceArguments(serverUrl, clientId, runtimeProfile.Isp, runtimeProfile.Name);
-            }
         }
     }
 
@@ -1020,64 +1014,6 @@ static void ApplyAuthoritativeClientMetadata(string serverUrl, string clientId, 
         transportState.RecreateHttpClient();
         Console.WriteLine($"Server proxy config updated: Mode={proxySettings.Mode}, Url={proxySettings.Url}");
     }
-}
-
-static bool ShouldBackwriteServiceArguments(bool isService)
-{
-    return isService || HasManagedServiceInstall();
-}
-
-static bool HasManagedServiceInstall()
-{
-    try
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            // 检测 NSSM 方式安装
-            var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CfSpeedtestClient");
-            if (File.Exists(Path.Combine(installDir, "nssm", "nssm.exe")))
-                return true;
-
-            // 检测 sc.exe 原生服务注册
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "sc.exe",
-                    Arguments = "query CfSpeedtestClient",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true,
-                };
-                using var proc = Process.Start(psi);
-                if (proc != null)
-                {
-                    proc.WaitForExit();
-                    return proc.ExitCode == 0;
-                }
-            }
-            catch { }
-
-            return false;
-        }
-
-        if (OperatingSystem.IsLinux())
-        {
-            return File.Exists("/etc/systemd/system/cfspeedtest-client.service")
-                || File.Exists("/etc/init.d/cfspeedtest-client");
-        }
-
-        if (OperatingSystem.IsMacOS())
-        {
-            return File.Exists("/Library/LaunchDaemons/uk.greepar.cfspeedtest.client.plist");
-        }
-    }
-    catch
-    {
-        // ignored
-    }
-
-    return false;
 }
 
 static async Task WaitForFetchSignalAsync(SemaphoreSlim immediateFetchSignal)
@@ -1391,120 +1327,6 @@ static string QuoteArg(string value)
     return "\"" + value.Replace("\"", "\\\"") + "\"";
 }
 
-static void TryUpdateServiceArguments(string serverUrl, string clientId, IspType isp, string clientName)
-{
-    try
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "CfSpeedtestClient");
-            var nssmExe = Path.Combine(installDir, "nssm", "nssm.exe");
-            var exePath = Path.Combine(installDir, "CfSpeedtest.Client.exe");
-            if (File.Exists(nssmExe) && File.Exists(exePath))
-            {
-                var parameters = $"--server \"{serverUrl}\" --client-id {clientId} --isp {isp} --name \"{clientName}\" --service-worker";
-
-                var setApplication = new ProcessStartInfo(nssmExe) { UseShellExecute = false, CreateNoWindow = true };
-                setApplication.ArgumentList.Add("set");
-                setApplication.ArgumentList.Add("CfSpeedtestClient");
-                setApplication.ArgumentList.Add("Application");
-                setApplication.ArgumentList.Add(exePath);
-                Process.Start(setApplication)?.WaitForExit();
-
-                var setParameters = new ProcessStartInfo(nssmExe) { UseShellExecute = false, CreateNoWindow = true };
-                setParameters.ArgumentList.Add("set");
-                setParameters.ArgumentList.Add("CfSpeedtestClient");
-                setParameters.ArgumentList.Add("AppParameters");
-                setParameters.ArgumentList.Add(parameters);
-                Process.Start(setParameters)?.WaitForExit();
-            }
-            return;
-        }
-
-        if (OperatingSystem.IsLinux())
-        {
-            var serviceName = "cfspeedtest-client";
-            var serviceFile = $"/etc/systemd/system/{serviceName}.service";
-            var openRcFile = $"/etc/init.d/{serviceName}";
-            var installDir = "/opt/cfspeedtest-client";
-            var execLine = $"ExecStart={installDir}/CfSpeedtest.Client --server {serverUrl} --client-id {clientId} --isp {isp} --name \"{clientName}\" --service";
-
-            if (File.Exists(serviceFile))
-            {
-                var lines = File.ReadAllLines(serviceFile)
-                    .Select(line => line.StartsWith("ExecStart=") ? execLine : line)
-                    .ToArray();
-                File.WriteAllLines(serviceFile, lines);
-                Process.Start("systemctl", "daemon-reload")?.WaitForExit();
-                return;
-            }
-
-            if (File.Exists(openRcFile))
-            {
-                var content = File.ReadAllText(openRcFile);
-                if (content.Contains("procd_set_param command "))
-                {
-                    var procdLines = File.ReadAllLines(openRcFile)
-                        .Select(line => line.Contains("procd_set_param command ")
-                            ? $"  procd_set_param command {installDir}/CfSpeedtest.Client --server {serverUrl} --client-id {clientId} --isp {isp} --name {clientName} --service"
-                            : line)
-                        .ToArray();
-                    File.WriteAllLines(openRcFile, procdLines);
-                    return;
-                }
-
-                var lines = File.ReadAllLines(openRcFile)
-                    .Select(line => line.StartsWith("command_args=")
-                        ? $"command_args=\"--server {serverUrl} --client-id {clientId} --isp {isp} --name {clientName} --service\""
-                        : line)
-                    .ToArray();
-                File.WriteAllLines(openRcFile, lines);
-                return;
-            }
-        }
-
-        if (OperatingSystem.IsMacOS())
-        {
-            var plistName = "uk.greepar.cfspeedtest.client";
-            var plistPath = $"/Library/LaunchDaemons/{plistName}.plist";
-            var installDir = "/usr/local/cfspeedtest-client";
-            if (File.Exists(plistPath))
-            {
-                var args = new[]
-                {
-                    $"    <string>{installDir}/CfSpeedtest.Client</string>",
-                    "    <string>--server</string>",
-                    $"    <string>{serverUrl}</string>",
-                    "    <string>--client-id</string>",
-                    $"    <string>{clientId}</string>",
-                    "    <string>--isp</string>",
-                    $"    <string>{isp}</string>",
-                    "    <string>--name</string>",
-                    $"    <string>{clientName}</string>",
-                    "    <string>--service</string>"
-                };
-                var lines = File.ReadAllLines(plistPath).ToList();
-                var start = lines.FindIndex(l => l.Contains("<key>ProgramArguments</key>"));
-                if (start >= 0)
-                {
-                    var arrayStart = start + 2;
-                    var arrayEnd = lines.FindIndex(arrayStart, l => l.Contains("</array>"));
-                    if (arrayEnd > arrayStart)
-                    {
-                        lines.RemoveRange(arrayStart, arrayEnd - arrayStart);
-                        lines.InsertRange(arrayStart, args);
-                        File.WriteAllLines(plistPath, lines);
-                    }
-                }
-            }
-        }
-    }
-    catch
-    {
-        // ignore service config update failures
-    }
-}
-
 static void CleanupOldFiles()
 {
     try
@@ -1557,13 +1379,11 @@ static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
 {
     var scriptPath = Path.Combine(Path.GetTempPath(), $"cfspeedtest-service-update-{Guid.NewGuid():N}.ps1");
     var taskName = $"CfSpeedtestClientUpdate-{Guid.NewGuid():N}";
-    var serviceArgs = string.Join(' ', Environment.GetCommandLineArgs().Skip(1).Select(QuoteArg));
     var script = $"$ServiceName = {PowerShellLiteral("CfSpeedtestClient")}\n" +
                  $"$StagingDir = {PowerShellLiteral(stagingDir)}\n" +
                  $"$TargetDir = {PowerShellLiteral(targetDir)}\n" +
                  $"$ScriptPath = {PowerShellLiteral(scriptPath)}\n" +
                  $"$TaskName = {PowerShellLiteral(taskName)}\n" +
-                 $"$ServiceArgs = {PowerShellLiteral(serviceArgs)}\n" +
                  $"$PidToWait = {Environment.ProcessId}\n" +
                  """
         $ErrorActionPreference = 'Stop'
@@ -1589,6 +1409,12 @@ static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
                 if ($status -match 'STATE\s+:\s+\d+\s+STOPPED') { break }
             } while ((Get-Date) -lt $deadline)
 
+            $nssmExe = Join-Path $TargetDir 'nssm\nssm.exe'
+            if (Test-Path -LiteralPath $nssmExe) {
+                $paramsBefore = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
+                Write-UpdateLog "NSSM AppParameters before copy: $paramsBefore"
+            }
+
             Get-ChildItem -LiteralPath $StagingDir -Recurse -File | ForEach-Object {
                 $relative = $_.FullName.Substring($StagingDir.Length).TrimStart('\', '/')
                 $destination = Join-Path $TargetDir $relative
@@ -1599,21 +1425,21 @@ static void ScheduleWindowsServiceUpdate(string stagingDir, string targetDir)
                 Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
             }
 
-            $nssmExe = Join-Path $TargetDir 'nssm\nssm.exe'
             if (Test-Path -LiteralPath $nssmExe) {
-                $params = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
-                if ([string]::IsNullOrWhiteSpace($params) -or $params -eq '-') {
-                    & $nssmExe set $ServiceName AppParameters $ServiceArgs | Out-Null
-                    Write-UpdateLog "Restored NSSM AppParameters from running client"
-                }
-                else {
-                    Write-UpdateLog "NSSM AppParameters preserved"
-                }
+                $paramsAfter = (& $nssmExe get $ServiceName AppParameters 2>$null | Out-String).Trim()
+                Write-UpdateLog "NSSM AppParameters after copy: $paramsAfter"
             }
 
             Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-            sc.exe start $ServiceName | Out-Null
-            Write-UpdateLog 'Update installed and service start requested'
+            $startOutput = sc.exe start $ServiceName 2>&1 | Out-String
+            $startExitCode = $LASTEXITCODE
+            Write-UpdateLog "Service start exit code: $startExitCode; output: $($startOutput.Trim())"
+            if ($startExitCode -ne 0) { throw "Service start failed with exit code $startExitCode" }
+
+            Start-Sleep -Seconds 3
+            $finalStatus = sc.exe query $ServiceName | Out-String
+            Write-UpdateLog "Service status after start: $($finalStatus.Trim())"
+            Write-UpdateLog 'Update installed and service started'
         }
         catch {
             Write-UpdateLog "Update failed: $($_.Exception.Message)"
