@@ -107,7 +107,9 @@ public class DnsUpdateService
         var hwConfig = config.HuaweiDns;
         var ispKey = isp.ToString();
 
-        var aggregatedResults = SelectDnsCandidates(bestResults, config.TopN, config.MinDownloadSpeedKBps);
+        var aggregatedResults = allowHistoryFallback
+            ? SelectDnsCandidates(bestResults, config.TopN, config.MinDownloadSpeedKBps)
+            : bestResults.Take(config.TopN).ToList();
         var usingFallback = aggregatedResults.Count > 0 && aggregatedResults.All(r => r.DownloadSpeedKBps < config.MinDownloadSpeedKBps);
 
         if (aggregatedResults.Count == 0 && allowHistoryFallback)

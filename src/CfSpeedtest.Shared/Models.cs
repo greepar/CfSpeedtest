@@ -640,14 +640,17 @@ public class ServerConfig
     /// <summary>交叉复测候选 IP 数量，0 表示使用 TopN * 2</summary>
     public int CrossTestCandidateCount { get; set; } = 10;
 
-    /// <summary>交叉复测通过策略：all 表示全部节点通过，ratio 表示按比例通过</summary>
+    /// <summary>保留用于读取旧配置；交叉复测固定要求全部节点通过</summary>
     public string CrossTestPassPolicy { get; set; } = "all";
 
-    /// <summary>按比例通过时要求的最低通过百分比</summary>
+    /// <summary>保留用于读取旧配置，不再参与交叉复测判定</summary>
     public double CrossTestMinPassRatePercent { get; set; } = 80;
 
     /// <summary>交叉复测允许的最大丢包百分比</summary>
     public double CrossTestMaxPacketLossPercent { get; set; } = 20;
+
+    /// <summary>交叉复测判断可访问所需的最低下载速度，独立于高速首选门槛</summary>
+    public double CrossTestConnectivityMinSpeedKBps { get; set; } = 128;
 
     /// <summary>一个候选至少需要多少个节点给出合格结果</summary>
     public int CrossTestMinValidReports { get; set; } = 2;

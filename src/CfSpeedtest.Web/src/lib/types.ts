@@ -188,6 +188,7 @@ export interface ServerConfig {
   crossTestPassPolicy: "all" | "ratio";
   crossTestMinPassRatePercent: number;
   crossTestMaxPacketLossPercent: number;
+  crossTestConnectivityMinSpeedKBps: number;
   crossTestMinValidReports: number;
   clientIntervalMinutes: number;
   historyRetentionDays: number;

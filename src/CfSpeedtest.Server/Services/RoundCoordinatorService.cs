@@ -404,6 +404,25 @@ public class RoundCoordinatorService : BackgroundService
     {
         if (state.Phase == RoundPhase.Initial)
         {
+            var config = _store.GetConfig();
+            var assignedClients = CountInitialTargetClients(state);
+            if (config.CrossTestEnabled && assignedClients >= 2 && state.ReportedClients.Count < assignedClients)
+            {
+                await _dns.UpdateDnsAsync(state.Isp, [], allowHistoryFallback: false);
+                lock (_lock)
+                {
+                    state.Finalized = true;
+                    _latestFinalizedStartAtUtc[state.IspKey] = state.StartAtUtc;
+                }
+
+                _logger.LogWarning(
+                    "Cross-test skipped for {Isp}: only {Reported}/{Assigned} initial clients reported; keeping current DNS records",
+                    state.IspKey,
+                    state.ReportedClients.Count,
+                    assignedClients);
+                return $"cross-test skipped: only {state.ReportedClients.Count}/{assignedClients} initial clients reported, current DNS kept";
+            }
+
             var crossTestSummary = TryStartCrossTest(state);
             if (crossTestSummary is not null)
             {
@@ -458,22 +477,39 @@ public class RoundCoordinatorService : BackgroundService
                 state.IspKey);
         }
         var allRoundResults = isCrossTestRound
-            ? BuildMedianAggregatedResults(validatedCrossResults)
+            ? BuildCrossAggregatedResults(validatedCrossResults, config)
             : sourceReports
                 .SelectMany(h => h.Results)
-                .OrderByDescending(r => r.Score)
+                .Select(r => RecalculateScore(r, config))
+                .OrderByDescending(r => r.DownloadSpeedKBps)
+                .ThenByDescending(r => r.Score)
                 .GroupBy(r => r.IpAddress, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
                 .ToList();
 
-        var topResults = allRoundResults
-            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
-            .OrderByDescending(r => r.Score)
-            .Take(config.TopN)
-            .ToList();
+        var hasPreferredCrossResults = false;
+        List<IpTestResult> topResults;
+        if (isCrossTestRound)
+        {
+            var preferredResults = allRoundResults
+                .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+                .ToList();
+            hasPreferredCrossResults = preferredResults.Count > 0;
+            topResults = (preferredResults.Count > 0 ? preferredResults : allRoundResults)
+                .Take(config.TopN)
+                .ToList();
+        }
+        else
+        {
+            topResults = allRoundResults
+                .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+                .OrderByDescending(r => r.Score)
+                .Take(config.TopN)
+                .ToList();
+        }
 
         int removed = 0;
-        if (config.AutoCleanupEnabled && topResults.Count > 0)
+        if (config.AutoCleanupEnabled && topResults.Count > 0 && (!isCrossTestRound || hasPreferredCrossResults))
         {
             var keepIps = topResults.Select(r => r.IpAddress).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var poolIps = _store.GetConfig().IpSources.TryGetValue(state.IspKey, out var source)
@@ -598,43 +634,73 @@ public class RoundCoordinatorService : BackgroundService
 
     private static List<string> BuildCrossTestIps(List<TestHistory> initialReports, ServerConfig config)
     {
-        var allResults = initialReports
-            .SelectMany(h => h.Results)
-            .Where(r => !string.IsNullOrWhiteSpace(r.IpAddress))
+        var candidateCount = GetCrossTestCandidateCount(config);
+        var candidatesByClient = initialReports
+            .Where(report => !string.IsNullOrWhiteSpace(report.ClientId))
+            .GroupBy(report => report.ClientId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .SelectMany(report => report.Results)
+                .Where(result => !string.IsNullOrWhiteSpace(result.IpAddress))
+                .Select(result => RecalculateScore(result, config))
+                .GroupBy(result => result.IpAddress, StringComparer.OrdinalIgnoreCase)
+                .Select(resultGroup => resultGroup
+                    .OrderByDescending(result => result.DownloadSpeedKBps)
+                    .ThenByDescending(result => result.Score)
+                    .First())
+                .OrderByDescending(result => result.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+                .ThenByDescending(result => result.DownloadSpeedKBps)
+                .ThenByDescending(result => result.Score)
+                .Select(result => result.IpAddress)
+                .ToList())
+            .Where(candidates => candidates.Count > 0)
             .ToList();
-        var qualifiedResults = allResults
-            .Where(r => r.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
-            .ToList();
-        var sourceResults = qualifiedResults.Count > 0 ? qualifiedResults : allResults;
 
-        return sourceResults
-            .OrderByDescending(r => r.Score)
-            .GroupBy(r => r.IpAddress, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First().IpAddress)
-            .Take(GetCrossTestCandidateCount(config))
-            .ToList();
+        var selected = new List<string>(candidateCount);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; selected.Count < candidateCount && candidatesByClient.Any(c => index < c.Count); index++)
+        {
+            foreach (var candidates in candidatesByClient)
+            {
+                if (index < candidates.Count && seen.Add(candidates[index]))
+                    selected.Add(candidates[index]);
+                if (selected.Count == candidateCount)
+                    break;
+            }
+        }
+
+        return selected;
     }
 
-    private static List<IpTestResult> BuildMedianAggregatedResults(
-        Dictionary<string, List<IpTestResult>> resultsByIp)
+    private static List<IpTestResult> BuildCrossAggregatedResults(
+        Dictionary<string, List<IpTestResult>> resultsByIp,
+        ServerConfig config)
     {
         return resultsByIp
             .Select(pair =>
             {
                 var items = pair.Value;
-                return new IpTestResult
+                var result = new IpTestResult
                 {
                     IpAddress = pair.Key,
-                    DownloadSpeedKBps = Median(items.Select(r => r.DownloadSpeedKBps)),
-                    AvgLatencyMs = Median(items.Select(r => r.AvgLatencyMs)),
+                    DownloadSpeedKBps = items.Min(r => r.DownloadSpeedKBps),
+                    AvgLatencyMs = items.Max(r => r.AvgLatencyMs),
                     MinLatencyMs = items.Min(r => r.MinLatencyMs),
-                    PacketLossRate = Median(items.Select(r => r.PacketLossRate)),
+                    PacketLossRate = items.Max(r => r.PacketLossRate),
                     TcpSuccessCount = items.Sum(r => r.TcpSuccessCount),
                     TcpTotalCount = items.Sum(r => r.TcpTotalCount),
-                    Score = Median(items.Select(r => r.Score)),
+                };
+                RecalculateScore(result, config);
+                return new
+                {
+                    Result = result,
+                    MedianSpeed = Median(items.Select(r => r.DownloadSpeedKBps)),
                 };
             })
-            .OrderByDescending(r => r.Score)
+            .OrderByDescending(item => item.Result.DownloadSpeedKBps)
+            .ThenByDescending(item => item.MedianSpeed)
+            .ThenBy(item => item.Result.PacketLossRate)
+            .ThenBy(item => item.Result.AvgLatencyMs)
+            .Select(item => item.Result)
             .ToList();
     }
 
@@ -649,8 +715,6 @@ public class RoundCoordinatorService : BackgroundService
         var validated = new Dictionary<string, List<IpTestResult>>(StringComparer.OrdinalIgnoreCase);
         var expectedClientCount = state.CrossAssignedClients.Count;
         var maxPacketLossRate = config.CrossTestMaxPacketLossPercent / 100.0;
-        var usePassRatio = string.Equals(config.CrossTestPassPolicy, "ratio", StringComparison.OrdinalIgnoreCase);
-
         foreach (var candidateIp in state.CrossTestIps)
         {
             var passingResults = new List<IpTestResult>();
@@ -665,20 +729,28 @@ public class RoundCoordinatorService : BackgroundService
                 if (result is not null &&
                     result.TcpSuccessCount > 0 &&
                     result.PacketLossRate <= maxPacketLossRate &&
-                    result.DownloadSpeedKBps >= config.MinDownloadSpeedKBps)
+                    result.DownloadSpeedKBps >= config.CrossTestConnectivityMinSpeedKBps)
                     passingResults.Add(result);
             }
 
             var enoughReports = passingResults.Count >= config.CrossTestMinValidReports;
-            var passRate = expectedClientCount == 0 ? 0 : passingResults.Count * 100.0 / expectedClientCount;
-            var policyPassed = usePassRatio
-                ? passRate >= config.CrossTestMinPassRatePercent
-                : passingResults.Count == expectedClientCount;
-            if (enoughReports && policyPassed)
+            if (enoughReports && passingResults.Count == expectedClientCount)
                 validated[candidateIp] = passingResults;
         }
 
         return validated;
+    }
+
+    public static IpTestResult RecalculateScore(IpTestResult result, ServerConfig config)
+    {
+        var speedReference = config.MaxDownloadSpeedKBps > 0
+            ? config.MaxDownloadSpeedKBps
+            : Math.Max(config.MinDownloadSpeedKBps, 1);
+        var speedScore = Math.Min(Math.Max(result.DownloadSpeedKBps, 0) / speedReference * 100.0, 100.0);
+        var latencyScore = Math.Clamp(100.0 - result.AvgLatencyMs, 0, 100);
+        var lossScore = Math.Clamp(1.0 - result.PacketLossRate, 0, 1) * 100.0;
+        result.Score = speedScore * 0.60 + latencyScore * 0.25 + lossScore * 0.15;
+        return result;
     }
 
     private static double Median(IEnumerable<double> values)

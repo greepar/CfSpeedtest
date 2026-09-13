@@ -159,7 +159,7 @@ export function ConfigPage() {
             onChange={(v) => set("apiRefreshIntervalMinutes", v)}
           />
           <Num
-            label="最低下载速度 KB/s"
+            label="高速首选门槛 KB/s"
             value={cfg.minDownloadSpeedKBps}
             onChange={(v) => set("minDownloadSpeedKBps", v)}
           />
@@ -174,7 +174,7 @@ export function ConfigPage() {
       <Card>
         <CardHeader
           title="交叉测速策略"
-          desc="先做多节点可用性硬门槛，再用中位数聚合通过节点的测速指标"
+          desc="全部地区先通过连通性硬门槛，再优先选择最差地区速度最快的 IP"
         />
         <CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Toggle
@@ -187,29 +187,20 @@ export function ConfigPage() {
             value={cfg.crossTestCandidateCount ?? 10}
             onChange={(v) => set("crossTestCandidateCount", v)}
           />
-          <Field
-            label="通过策略"
-            hint="全部节点最安全；按比例适合节点较多且允许个别节点异常"
-          >
-            <Select
-              value={cfg.crossTestPassPolicy ?? "all"}
-              onChange={(e) =>
-                set("crossTestPassPolicy", e.target.value as "all" | "ratio")
-              }
-            >
+          <Field label="通过策略" hint="任一参与节点缺失或不通过时保留当前 DNS">
+            <Select value="all" disabled>
               <option value="all">全部节点通过</option>
-              <option value="ratio">按通过比例</option>
             </Select>
           </Field>
-          <Num
-            label="最低通过比例（%）"
-            value={cfg.crossTestMinPassRatePercent ?? 80}
-            onChange={(v) => set("crossTestMinPassRatePercent", v)}
-          />
           <Num
             label="最大允许丢包率（%）"
             value={cfg.crossTestMaxPacketLossPercent ?? 20}
             onChange={(v) => set("crossTestMaxPacketLossPercent", v)}
+          />
+          <Num
+            label="连通最低速度 KB/s"
+            value={cfg.crossTestConnectivityMinSpeedKBps ?? 128}
+            onChange={(v) => set("crossTestConnectivityMinSpeedKBps", v)}
           />
           <Num
             label="最低有效节点数"

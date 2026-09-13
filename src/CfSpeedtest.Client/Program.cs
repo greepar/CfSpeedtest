@@ -282,7 +282,10 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
             Console.Write($"DL: {result.DownloadSpeedKBps,8:F1} KB/s | ");
 
             // 2c. 综合评分: 速度权重60%, 延迟权重25%, 丢包权重15%
-            var speedScore = Math.Min(result.DownloadSpeedKBps / 1000.0, 100.0); // 归一化到0-100
+            var speedReference = task.MaxDownloadSpeedKBps > 0
+                ? task.MaxDownloadSpeedKBps
+                : Math.Max(task.MinDownloadSpeedKBps, 1);
+            var speedScore = Math.Min(result.DownloadSpeedKBps / speedReference * 100.0, 100.0);
             var latencyScore = Math.Max(0, 100.0 - result.AvgLatencyMs);         // 延迟越低越好
             var lossScore = (1.0 - result.PacketLossRate) * 100.0;               // 丢包越少越好
             result.Score = speedScore * 0.60 + latencyScore * 0.25 + lossScore * 0.15;
@@ -293,11 +296,11 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         }
         runtimeState.SetTesting(maxTestIpCount, testedIps.Count);
 
-        // 当前批次测完后再判断是否达标；只要已有达标结果就停止，不继续拉下一批
+        // 需要全量上报时继续补拉到本轮上限，为服务端提供足够的交叉复测候选。
         if (currentBatchRemaining == 0 && pendingIps.Count == 0 && testedIps.Count < maxTestIpCount)
         {
             var qualifiedCount = allResults.Count(r => r.DownloadSpeedKBps >= task.MinDownloadSpeedKBps);
-            if (qualifiedCount > 0)
+            if (qualifiedCount > 0 && !task.ReportAllResults)
             {
                 runtimeState.AppendLog($"Batch completed and found {qualifiedCount} qualified result(s), stopping");
                 break;

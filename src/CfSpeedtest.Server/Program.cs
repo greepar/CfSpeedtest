@@ -729,7 +729,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         TaskId = round.TaskId,
         ScheduledAtUtc = round.ScheduledAtUtc,
         IsCrossTest = round.IsCrossTest,
-        ReportAllResults = round.IsCrossTest,
+        ReportAllResults = round.IsCrossTest || config.CrossTestEnabled,
     };
 
     if (round.IsImmediateDispatch)
@@ -751,6 +751,9 @@ app.MapPost("/api/report", async (SpeedTestReport report, DataStore store, Round
     var client = store.GetClient(report.ClientId);
     if (client is null)
         return ApiResponse<string>.Fail("Client not registered");
+    var config = store.GetConfig();
+    foreach (var result in report.Results)
+        RoundCoordinatorService.RecalculateScore(result, config);
     client.LastSeenAt = DateTime.UtcNow;
     client.RuntimeStatus = "已完成测速";
     client.CurrentTaskTestedIps = report.Results.Count;
@@ -817,13 +820,11 @@ app.MapGet("/api/config", (DataStore store) =>
 // ============================================================
 app.MapPost("/api/config", (ServerConfig config, DataStore store) =>
 {
-    config.CrossTestPassPolicy = (config.CrossTestPassPolicy ?? string.Empty).Trim().ToLowerInvariant();
-    if (config.CrossTestPassPolicy is not ("all" or "ratio"))
-        return ApiResponse<string>.Fail("交叉测速通过策略必须是 all 或 ratio");
-    if (config.CrossTestMinPassRatePercent is <= 0 or > 100)
-        return ApiResponse<string>.Fail("交叉测速最低通过比例必须在 0 到 100 之间");
+    config.CrossTestPassPolicy = "all";
     if (config.CrossTestMaxPacketLossPercent is < 0 or > 100)
         return ApiResponse<string>.Fail("交叉测速最大丢包率必须在 0 到 100 之间");
+    if (config.CrossTestConnectivityMinSpeedKBps < 0)
+        return ApiResponse<string>.Fail("交叉测速连通最低速度不能小于 0");
     if (config.CrossTestMinValidReports is < 1 or > 100)
         return ApiResponse<string>.Fail("交叉测速最低有效节点数必须在 1 到 100 之间");
     if (config.WebUiAuth.MaxFailedLoginAttempts is < 1 or > 100)
