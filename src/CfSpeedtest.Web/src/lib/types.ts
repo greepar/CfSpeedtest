@@ -161,6 +161,7 @@ export interface WebhookConfig {
   headers: WebhookHeader[];
   notifyClientOnline: boolean;
   notifyClientOffline: boolean;
+  notifyWebUiLogin: boolean;
   offlineNotificationDelaySeconds: number;
   bodyTemplate: string;
 }

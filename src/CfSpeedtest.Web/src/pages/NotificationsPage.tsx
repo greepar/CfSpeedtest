@@ -82,7 +82,7 @@ export function NotificationsPage() {
               Webhook 通知
             </span>
           }
-          desc="客户端上线或超过心跳超时时间离线时，向指定地址发送 JSON 通知"
+          desc="客户端上下线或 WebUI 首次登录时，向指定地址发送 JSON 通知"
           action={
             <>
               <Button variant="secondary" loading={testing} onClick={test}>
@@ -194,7 +194,7 @@ export function NotificationsPage() {
               </div>
             )}
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Toggle
               label="客户端上线通知"
               checked={config.notifyClientOnline}
@@ -207,6 +207,13 @@ export function NotificationsPage() {
               checked={config.notifyClientOffline}
               onChange={(notifyClientOffline) =>
                 setConfig({ ...config, notifyClientOffline })
+              }
+            />
+            <Toggle
+              label="首次登录 Webhook 通知"
+              checked={config.notifyWebUiLogin}
+              onChange={(notifyWebUiLogin) =>
+                setConfig({ ...config, notifyWebUiLogin })
               }
             />
           </div>
@@ -270,7 +277,7 @@ export function NotificationsPage() {
         />
         <CardBody className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {[
-            ["{{eventType}}", "client.online / client.offline"],
+            ["{{eventType}}", "client.online / client.offline / webui.login"],
             ["{{occurredAtUtc}}", "事件 UTC 时间"],
             ["{{clientId}}", "客户端 ID"],
             ["{{clientName}}", "客户端名称"],
@@ -280,6 +287,9 @@ export function NotificationsPage() {
             ["{{lastSeenAtUtc}}", "最后心跳 UTC 时间"],
             ["{{version}}", "客户端版本"],
             ["{{platform}}", "客户端平台"],
+            ["{{username}}", "WebUI 登录用户名"],
+            ["{{ipAddress}}", "WebUI 登录来源 IP"],
+            ["{{userAgent}}", "WebUI 登录浏览器 User-Agent"],
             ["{{message}}", "中文事件消息"],
           ].map(([placeholder, description]) => (
             <div

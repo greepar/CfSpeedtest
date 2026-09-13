@@ -525,7 +525,7 @@ app.MapGet("/api/auth/status", (HttpContext http, DataStore store, WebUiAuthServ
     });
 });
 
-app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataStore store, WebUiAuthService auth) =>
+app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataStore store, WebUiAuthService auth, WebhookNotificationService notifications) =>
 {
     var conf = store.GetConfig().WebUiAuth;
     if (!conf.Enabled)
@@ -561,6 +561,10 @@ app.MapPost("/api/auth/login", (HttpContext http, WebUiLoginRequest req, DataSto
     auth.ClearLoginFailures(http);
     var token = auth.CreateSession(store, http, conf.Username);
     auth.SignIn(http, token);
+    notifications.WebUiLogin(
+        conf.Username,
+        http.Connection.RemoteIpAddress?.ToString() ?? string.Empty,
+        http.Request.Headers.UserAgent.ToString());
     return ApiResponse<WebUiAuthStatus>.Ok(new WebUiAuthStatus
     {
         Enabled = true,

@@ -40,6 +40,23 @@ public sealed class WebhookNotificationService(
         }
     }
 
+    public void WebUiLogin(string username, string ipAddress, string userAgent)
+    {
+        var config = store.GetConfig().Webhook;
+        if (!config.Enabled || !config.NotifyWebUiLogin)
+            return;
+
+        _queue.Writer.TryWrite(new WebhookNotification
+        {
+            EventType = "webui.login",
+            OccurredAtUtc = DateTime.UtcNow,
+            Username = username,
+            IpAddress = ipAddress,
+            UserAgent = userAgent,
+            Message = $"用户 {username} 已登录 WebUI"
+        });
+    }
+
     public async Task<string> SendTestAsync(CancellationToken cancellationToken = default)
     {
         var notification = new WebhookNotification
@@ -68,6 +85,9 @@ public sealed class WebhookNotificationService(
                 LastSeenAtUtc = DateTime.UtcNow,
                 Version = "1.0.0",
                 Platform = "linux-x64",
+                Username = "admin",
+                IpAddress = "127.0.0.1",
+                UserAgent = "Webhook test",
                 Message = "CfSpeedtest Webhook 配置测试"
             });
             using var document = JsonDocument.Parse(rendered);
@@ -200,7 +220,7 @@ public sealed class WebhookNotificationService(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to send webhook event {EventType} for client {ClientId}",
+                logger.LogWarning(ex, "Failed to send webhook event {EventType} for subject {SubjectId}",
                     notification.EventType, notification.ClientId);
             }
         }
@@ -282,6 +302,9 @@ public sealed class WebhookNotificationService(
             ["{{lastSeenAtUtc}}"] = EscapeJsonString(notification.LastSeenAtUtc?.ToString("O") ?? string.Empty),
             ["{{version}}"] = EscapeJsonString(notification.Version ?? string.Empty),
             ["{{platform}}"] = EscapeJsonString(notification.Platform ?? string.Empty),
+            ["{{username}}"] = EscapeJsonString(notification.Username ?? string.Empty),
+            ["{{ipAddress}}"] = EscapeJsonString(notification.IpAddress ?? string.Empty),
+            ["{{userAgent}}"] = EscapeJsonString(notification.UserAgent ?? string.Empty),
             ["{{message}}"] = EscapeJsonString(notification.Message)
         };
 

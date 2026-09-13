@@ -486,6 +486,7 @@ public class WebhookConfig
     public List<WebhookHeader> Headers { get; set; } = [];
     public bool NotifyClientOnline { get; set; } = true;
     public bool NotifyClientOffline { get; set; } = true;
+    public bool NotifyWebUiLogin { get; set; }
     public int OfflineNotificationDelaySeconds { get; set; } = 60;
     public string BodyTemplate { get; set; } = """
         {
@@ -510,6 +511,9 @@ public class WebhookNotification
     public DateTime? LastSeenAtUtc { get; set; }
     public string? Version { get; set; }
     public string? Platform { get; set; }
+    public string? Username { get; set; }
+    public string? IpAddress { get; set; }
+    public string? UserAgent { get; set; }
     public string Message { get; set; } = string.Empty;
 }
 
