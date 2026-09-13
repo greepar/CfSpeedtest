@@ -1,9 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <Sdk Name="StuDev.AotAnywhere" Version="1.0.5" />
-
   <ItemGroup>
     <ProjectReference Include="..\CfSpeedtest.Shared\CfSpeedtest.Shared.csproj" />
+    <PackageReference Include="StuDev.AotAnywhere" Version="1.0.5" PrivateAssets="all" Condition="'$(UseAotAnywhere)' == 'true'" />
+    <PackageReference Include="Vezel.Zig.Toolsets.$(NETCoreSdkPortableRuntimeIdentifier)" Version="0.16.0.2" PrivateAssets="all" GeneratePathProperty="true" IsImplicitlyDefined="true" Condition="'$(UseAotAnywhere)' == 'true'" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -17,6 +17,10 @@
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UseAotAnywhere)' == 'true'">
+    <NoWarn>$(NoWarn);NETSDK1023</NoWarn>
   </PropertyGroup>
 
 </Project>

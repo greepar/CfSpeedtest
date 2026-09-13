@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <Sdk Name="StuDev.AotAnywhere" Version="1.0.5" />
-
   <ItemGroup>
     <ProjectReference Include="..\CfSpeedtest.Shared\CfSpeedtest.Shared.csproj" />
+    <PackageReference Include="StuDev.AotAnywhere" Version="1.0.5" PrivateAssets="all" Condition="'$(UseAotAnywhere)' == 'true'" />
+    <PackageReference Include="Vezel.Zig.Toolsets.$(NETCoreSdkPortableRuntimeIdentifier)" Version="0.16.0.2" PrivateAssets="all" GeneratePathProperty="true" IsImplicitlyDefined="true" Condition="'$(UseAotAnywhere)' == 'true'" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -21,6 +21,10 @@
     <FileVersion>2.1.12.0</FileVersion>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UseAotAnywhere)' == 'true'">
+    <NoWarn>$(NoWarn);NETSDK1023</NoWarn>
   </PropertyGroup>
 
   <!-- WebUI 资源编译进程序集。发布单文件时不依赖 wwwroot 或 staticwebassets 清单。 -->

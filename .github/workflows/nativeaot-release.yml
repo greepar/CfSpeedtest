@@ -84,10 +84,12 @@ jobs:
           - kind: Client
             project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: osx-x64
+            runner: macos-14
             archive_name: cfspeedtest-client-osx-x64
           - kind: Client
             project: src/CfSpeedtest.Client/CfSpeedtest.Client.csproj
             rid: osx-arm64
+            runner: macos-14
             archive_name: cfspeedtest-client-osx-arm64
           - kind: Server
             project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
@@ -118,10 +120,12 @@ jobs:
           - kind: Server
             project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: osx-x64
+            runner: macos-14
             archive_name: cfspeedtest-server-osx-x64
           - kind: Server
             project: src/CfSpeedtest.Server/CfSpeedtest.Server.csproj
             rid: osx-arm64
+            runner: macos-14
             archive_name: cfspeedtest-server-osx-arm64
 
     steps:
@@ -149,6 +153,7 @@ jobs:
           -p:PublishSingleFile=true
           -p:StripSymbols=true
           -p:SkipBuildWebUi=true
+          -p:UseAotAnywhere=${{ startsWith(matrix.rid, 'linux') }}
 
       - name: Verify embedded WebUI (Unix)
         if: matrix.kind == 'Server' && runner.os != 'Windows'
