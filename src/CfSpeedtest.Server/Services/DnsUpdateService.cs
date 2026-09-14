@@ -45,21 +45,27 @@ public class DnsUpdateService
 
             if (_lastStatus.TryGetValue(isp, out var status))
             {
-                if (string.IsNullOrWhiteSpace(status.Domain) && hwConfig.Records.TryGetValue(isp, out var statusRec))
+                var displayStatus = new DnsUpdateStatus
                 {
-                    status.Domain = statusRec.Domain;
+                    Isp = status.Isp,
+                    Domain = status.Domain,
+                    Results = status.Results,
+                    LastUpdatedAt = status.LastUpdatedAt,
+                    Success = status.Success,
+                    Message = status.Message,
+                };
+
+                if (string.IsNullOrWhiteSpace(displayStatus.Domain) && hwConfig.Records.TryGetValue(isp, out var statusRec))
+                    displayStatus.Domain = statusRec.Domain;
+
+                if ((displayStatus.Results is null || displayStatus.Results.Count == 0) && aggregatedResults.Count > 0)
+                {
+                    displayStatus.Results = aggregatedResults;
+                    if (string.IsNullOrWhiteSpace(displayStatus.Message))
+                        displayStatus.Message = "当前展示最近一次可聚合的测速候选结果";
                 }
 
-                if ((status.Results is null || status.Results.Count == 0) && aggregatedResults.Count > 0)
-                {
-                    status.Results = aggregatedResults;
-                    if (string.IsNullOrWhiteSpace(status.Message))
-                    {
-                        status.Message = "当前展示最近一次可聚合的测速候选结果";
-                    }
-                }
-
-                result.Add(status);
+                result.Add(displayStatus);
             }
             else
             {
@@ -142,7 +148,7 @@ public class DnsUpdateService
                 && DateTime.UtcNow - lastStatus.LastUpdatedAt.Value < TimeSpan.FromMinutes(hwConfig.UpdateIntervalMinutes))
             {
                 var remaining = lastStatus.LastUpdatedAt.Value.AddMinutes(hwConfig.UpdateIntervalMinutes) - DateTime.UtcNow;
-                UpdatePreviewStatus(ispKey, aggregatedResults, hwConfig, false,
+                UpdatePendingStatus(ispKey, aggregatedResults,
                     usingFallback
                         ? $"已汇总本次兜底结果（未达到最低下载速度 {config.MinDownloadSpeedKBps:F1} KB/s），等待按轮次自动更新（剩余约 {Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟）"
                         : $"已汇总本次 TopN，等待按轮次自动更新（剩余约 {Math.Max(1, Math.Ceiling(remaining.TotalMinutes))} 分钟）");
@@ -488,6 +494,15 @@ public class DnsUpdateService
         }
 
         _lastStatus[ispKey] = status;
+    }
+
+    private void UpdatePendingStatus(string ispKey, List<IpTestResult> testResults, string message)
+    {
+        if (_lastStatus.TryGetValue(ispKey, out var status))
+        {
+            status.Results = testResults;
+            status.Message = message;
+        }
     }
 
     private static void ValidateSigningConfig(HuaweiDnsConfig hwConfig)

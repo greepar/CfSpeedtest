@@ -107,7 +107,18 @@ public class RoundCoordinatorService : BackgroundService
                     StartAtUtc = startAtUtc,
                     FinalizeAfterUtc = startAtUtc.Add(GetFinalizeGracePeriod(config)),
                 };
+                RestoreInitialReports(state);
                 _rounds[ispKey] = state;
+            }
+
+            if (state.ReportedClients.Contains(clientId))
+            {
+                var nextStartAtUtc = GetNextRoundStartUtc(state.StartAtUtc.AddSeconds(1), config.ClientIntervalMinutes);
+                return new RoundTaskDispatch(
+                    $"{ispKey}-{nextStartAtUtc:yyyyMMddHHmmss}",
+                    nextStartAtUtc,
+                    IsImmediateDispatch: false,
+                    IsCrossTest: false);
             }
 
             state.AssignedClients.Add(clientId);
@@ -248,6 +259,8 @@ public class RoundCoordinatorService : BackgroundService
                 && state.Phase == RoundPhase.Initial
                 && state.TaskId == report.TaskId)
             {
+                state.PendingTriggerClients.Remove(report.ClientId);
+                state.AssignedClients.Add(report.ClientId);
                 state.ReportedClients.Add(report.ClientId);
                 state.InitialResultIpsByClient[report.ClientId] = report.Results
                     .Select(r => r.IpAddress)
@@ -632,6 +645,22 @@ public class RoundCoordinatorService : BackgroundService
             .ToList();
     }
 
+    private void RestoreInitialReports(RoundState state)
+    {
+        foreach (var report in GetRoundReports(state.Isp, state.TaskId))
+        {
+            if (string.IsNullOrWhiteSpace(report.ClientId))
+                continue;
+
+            state.AssignedClients.Add(report.ClientId);
+            state.ReportedClients.Add(report.ClientId);
+            state.InitialResultIpsByClient[report.ClientId] = report.Results
+                .Select(result => result.IpAddress)
+                .Where(ip => !string.IsNullOrWhiteSpace(ip))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
     private static List<string> BuildCrossTestIps(List<TestHistory> initialReports, ServerConfig config)
     {
         var candidateCount = GetCrossTestCandidateCount(config);
@@ -820,7 +849,7 @@ public class RoundCoordinatorService : BackgroundService
 
     private static TimeSpan GetCrossFinalizeGracePeriod(ServerConfig config, int candidateCount)
     {
-        var perIpSeconds = Math.Max(1, config.TcpTestDurationSeconds) + Math.Max(1, config.DownloadDurationSeconds);
+        var perIpSeconds = GetPerIpTimeBudgetSeconds(config);
         var estimatedSeconds = Math.Max(1, candidateCount) * perIpSeconds;
         return TimeSpan.FromSeconds(estimatedSeconds + Math.Max(60, config.HeartbeatIntervalSeconds * 2));
     }
@@ -843,9 +872,17 @@ public class RoundCoordinatorService : BackgroundService
 
     private static TimeSpan GetFinalizeGracePeriod(ServerConfig config)
     {
-        var perIpSeconds = Math.Max(1, config.TcpTestDurationSeconds) + Math.Max(1, config.DownloadDurationSeconds);
+        var perIpSeconds = GetPerIpTimeBudgetSeconds(config);
         var estimatedBatchSeconds = Math.Max(1, Math.Max(config.BatchSize, config.MaxTestIpCount)) * perIpSeconds;
         return TimeSpan.FromSeconds(estimatedBatchSeconds + 60);
+    }
+
+    private static int GetPerIpTimeBudgetSeconds(ServerConfig config)
+    {
+        const int setupAndSchedulingOverheadSeconds = 5;
+        return Math.Max(1, config.TcpTestDurationSeconds)
+            + Math.Max(1, config.DownloadDurationSeconds)
+            + setupAndSchedulingOverheadSeconds;
     }
 
     private RoundState? EnsureActiveRoundStateLocked(IspType isp, string clientId, bool allowCreateForScheduledRound)
@@ -872,6 +909,7 @@ public class RoundCoordinatorService : BackgroundService
                 StartAtUtc = currentStartUtc,
                 FinalizeAfterUtc = currentStartUtc.Add(GetFinalizeGracePeriod(config)),
             };
+            RestoreInitialReports(state);
             _rounds[ispKey] = state;
         }
 
