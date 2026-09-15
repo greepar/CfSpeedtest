@@ -729,7 +729,7 @@ app.MapGet("/api/task/{clientId}", (string clientId, DataStore store, IpPoolServ
         TaskId = round.TaskId,
         ScheduledAtUtc = round.ScheduledAtUtc,
         IsCrossTest = round.IsCrossTest,
-        ReportAllResults = round.IsCrossTest || config.CrossTestEnabled,
+        ReportAllResults = round.IsCrossTest,
     };
 
     if (round.IsImmediateDispatch)
