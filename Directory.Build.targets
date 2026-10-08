@@ -1,0 +1,7 @@
+<Project>
+  <!-- Zig defaults musl executables to static linkage, which prevents .NET
+       from loading ICU and OpenSSL at runtime. Keep the musl loader enabled. -->
+  <ItemGroup Condition="'$(UseAotAnywhere)' == 'true' and $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-musl-'))">
+    <LinkerArg Include="-dynamic" />
+  </ItemGroup>
+</Project>

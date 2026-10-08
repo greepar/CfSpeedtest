@@ -360,6 +360,9 @@ public class BootstrapTokenCreateResponse
 
     /// <summary>Windows PowerShell 一行命令</summary>
     public string WindowsCommand { get; set; } = string.Empty;
+
+    /// <summary>客户端 Compose 配置下载地址</summary>
+    public string ComposeUrl { get; set; } = string.Empty;
 }
 
 /// <summary>

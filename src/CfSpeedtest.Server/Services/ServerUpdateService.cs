@@ -209,7 +209,9 @@ public sealed class ServerUpdateService(
             }
 
             ZipFile.ExtractToDirectory(archivePath, stagingDir, overwriteFiles: true);
-            var stagedExe = Path.Combine(stagingDir, OperatingSystem.IsWindows() ? "CfSpeedtest.Server.exe" : "CfSpeedtest.Server");
+            var stagedExe = Path.Combine(stagingDir, OperatingSystem.IsWindows() ? "cftest-server.exe" : "cftest-server");
+            if (!File.Exists(stagedExe))
+                stagedExe = Path.Combine(stagingDir, OperatingSystem.IsWindows() ? "CfSpeedtest.Server.exe" : "CfSpeedtest.Server");
             if (!File.Exists(stagedExe) || new FileInfo(stagedExe).Length == 0)
                 throw new InvalidDataException($"Update package does not contain {Path.GetFileName(stagedExe)}");
 

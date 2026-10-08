@@ -75,8 +75,13 @@ fi
 
 curl -fL --retry 3 --connect-timeout 15 -o "$ZIP_PATH" "$DOWNLOAD_URL"
 unzip -oq "$ZIP_PATH" -d "$STAGE_DIR"
+# Accept packages published before the executable rename.
+if [ ! -f "$STAGE_DIR/cftest-agent" ] && [ -f "$STAGE_DIR/CfSpeedtest.Client" ]; then
+  mv "$STAGE_DIR/CfSpeedtest.Client" "$STAGE_DIR/cftest-agent"
+fi
+[ -f "$STAGE_DIR/cftest-agent" ] || fail "客户端包缺少 cftest-agent"
 cp -fR "$STAGE_DIR"/. "$INSTALL_DIR"/
-chmod +x "$INSTALL_DIR/CfSpeedtest.Client"
+chmod +x "$INSTALL_DIR/cftest-agent"
 
 cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -87,7 +92,7 @@ cat > "$PLIST_PATH" <<EOF
   <string>${PLIST_NAME}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${INSTALL_DIR}/CfSpeedtest.Client</string>
+    <string>${INSTALL_DIR}/cftest-agent</string>
     <string>--server</string>
     <string>${SERVER_URL}</string>
     <string>--client-id</string>

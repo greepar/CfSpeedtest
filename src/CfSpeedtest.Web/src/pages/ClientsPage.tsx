@@ -10,6 +10,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { containerDeploy } from "@/lib/containerDeploy";
 import { formatDateTime, timeAgo } from "@/lib/format";
 import { ISP_KEYS, ispBadgeTone, ispKey, ispLabel } from "@/lib/isp";
 import type {
@@ -177,7 +178,9 @@ export function ClientsPage() {
                         <td>
                           <div>{c.version || "-"}</div>
                           <div className="text-xs text-fg-subtle">
-                            {c.platform || "-"}
+                            {c.platform === "docker"
+                              ? "Docker"
+                              : c.platform || "-"}
                           </div>
                         </td>
                         <td>
@@ -443,7 +446,7 @@ function UninstallModal({
   }
   async function copy(value: string) {
     await navigator.clipboard.writeText(value);
-    toast("已复制命令", "success");
+    toast("已复制", "success");
   }
   async function deleteRecord() {
     if (!client) return;
@@ -539,6 +542,10 @@ function DeployModal({
   const [name, setName] = useState("");
   const [isp, setIsp] = useState<IspKey>("Telecom");
   const [serverUrl, setServerUrl] = useState(location.origin);
+  const [platform, setPlatform] = useState<
+    "linux" | "windows" | "macos" | "docker"
+  >("linux");
+  const [method, setMethod] = useState<"native" | "run" | "compose">("native");
   const [includeProxy, setIncludeProxy] = useState(true);
   const [disableAutoUpdate, setDisableAutoUpdate] = useState(false);
   const [res, setRes] = useState<BootstrapTokenCreateResponse | null>(null);
@@ -576,8 +583,8 @@ function DeployModal({
         name,
         isp,
         serverUrl,
-        includeProxy,
-        disableAutoUpdate,
+        includeProxy: method === "native" && includeProxy,
+        disableAutoUpdate: method !== "native" || disableAutoUpdate,
         clientId: client?.clientId || undefined,
       },
     );
@@ -587,33 +594,76 @@ function DeployModal({
   }
   async function copy(v: string) {
     await navigator.clipboard.writeText(v);
-    toast("已复制命令", "success");
+    toast("已复制", "success");
   }
+  const container = res ? containerDeploy(res) : null;
   const stateTone = status?.online
     ? "success"
     : status?.consumed
       ? "primary"
-      : status?.expired
+      : method !== "run" && status?.expired
         ? "danger"
         : "warning";
   const stateText = status?.online
     ? "已上线"
     : status?.consumed
       ? "已添加"
-      : status?.expired
+      : method !== "run" && status?.expired
         ? "已过期"
         : "等待上线";
   return (
     <Modal
       open={!!client}
-      title="一键部署客户端"
+      title="一键部署指令"
       onClose={onClose}
-      maxWidth="max-w-3xl"
+      maxWidth="max-w-2xl"
+      footer={
+        <Button onClick={create}>
+          <Rocket className="h-4 w-4" />
+          生成命令
+        </Button>
+      }
     >
       <div className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div
+          role="group"
+          aria-label="部署平台"
+          className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1"
+        >
+          {(
+            [
+              ["linux", "Linux"],
+              ["windows", "Windows"],
+              ["macos", "macOS"],
+              ["docker", "Docker"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={platform === key}
+              onClick={() => {
+                if ((platform === "docker") !== (key === "docker")) {
+                  setMethod(key === "docker" ? "run" : "native");
+                  setRes(null);
+                  setStatus(null);
+                }
+                setPlatform(key);
+              }}
+              className={`h-9 rounded-lg border px-1 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+                platform === key
+                  ? "border-border bg-card text-fg shadow-sm"
+                  : "border-transparent text-fg-muted hover:text-fg"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="grid items-start gap-x-4 gap-y-5 sm:grid-cols-2">
           <Field label="客户端名称">
             <Input
+              className="h-10"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="留空自动生成"
@@ -621,6 +671,7 @@ function DeployModal({
           </Field>
           <Field label="运营商">
             <Select
+              className="h-10"
               value={isp}
               onChange={(e) => setIsp(e.target.value as IspKey)}
             >
@@ -631,67 +682,119 @@ function DeployModal({
               ))}
             </Select>
           </Field>
-          <Field label="服务端地址">
+          <Field
+            label="服务端地址"
+            hint={
+              method !== "native"
+                ? "填写容器可访问的地址；localhost / 127.0.0.1 指向容器自身。"
+                : undefined
+            }
+          >
             <Input
+              className="h-10"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
             />
           </Field>
-          <div className="grid gap-3 text-sm">
-            <label className="flex items-center justify-between rounded-lg border border-border p-3">
-              携带 GH Proxy
-              <Switch checked={includeProxy} onChange={setIncludeProxy} />
-            </label>
-            <label className="flex items-center justify-between rounded-lg border border-border p-3">
-              禁用自动更新
-              <Switch
-                checked={disableAutoUpdate}
-                onChange={setDisableAutoUpdate}
-              />
-            </label>
-          </div>
+          {platform === "docker" && (
+            <Field label="部署方式">
+              <Select
+                className="h-10"
+                value={method}
+                onChange={(e) => setMethod(e.target.value as "run" | "compose")}
+              >
+                <option value="run">直接命令</option>
+                <option value="compose">Compose</option>
+              </Select>
+            </Field>
+          )}
+          {method === "native" && (
+            <div className="grid gap-3 text-sm sm:col-span-2 sm:grid-cols-2">
+              <label className="flex items-center justify-between rounded-lg border border-border p-3">
+                携带 GH Proxy
+                <Switch checked={includeProxy} onChange={setIncludeProxy} />
+              </label>
+              <label className="flex items-center justify-between rounded-lg border border-border p-3">
+                禁用自动更新
+                <Switch
+                  checked={disableAutoUpdate}
+                  onChange={setDisableAutoUpdate}
+                />
+              </label>
+            </div>
+          )}
         </div>
-        <Button onClick={create}>
-          <Rocket className="h-4 w-4" />
-          生成命令
-        </Button>
+        {method !== "native" && (
+          <p className="rounded-lg bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-fg-muted">
+            容器通过更新镜像升级，已禁用容器内自动更新。
+          </p>
+        )}
         {res && (
           <div className="space-y-3 rounded-xl border border-border bg-surface p-4">
             <div className="flex flex-wrap gap-2 text-sm">
-              <Badge tone="primary">Token {res.token}</Badge>
+              <Badge tone="primary">
+                {method === "native"
+                  ? `Token ${res.token}`
+                  : `客户端 ${res.clientId}`}
+              </Badge>
               <Badge tone={stateTone}>{stateText}</Badge>
-              <span className="text-fg-muted">
-                过期时间：{formatDateTime(res.expiresAtUtc)}
-              </span>
+              {method !== "run" && (
+                <span className="text-fg-muted">
+                  过期时间：{formatDateTime(res.expiresAtUtc)}
+                </span>
+              )}
             </div>
-            <div>
-              <div className="mb-2 flex items-center justify-between text-sm font-medium">
-                Linux / macOS
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => copy(res.linuxCommand)}
-                >
-                  <Copy className="h-4 w-4" />
-                  复制
-                </Button>
-              </div>
-              <CodeBox value={res.linuxCommand} />
-            </div>
-            <div>
-              <div className="mb-2 flex items-center justify-between text-sm font-medium">
-                Windows PowerShell
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => copy(res.windowsCommand)}
-                >
-                  <Copy className="h-4 w-4" />
-                  复制
-                </Button>
-              </div>
-              <CodeBox value={res.windowsCommand} />
-            </div>
+            {method === "native" ? (
+              <CommandBlock
+                title={
+                  platform === "windows"
+                    ? "Windows PowerShell"
+                    : platform === "macos"
+                      ? "macOS"
+                      : "Linux"
+                }
+                value={
+                  platform === "windows" ? res.windowsCommand : res.linuxCommand
+                }
+                onCopy={() =>
+                  copy(
+                    platform === "windows"
+                      ? res.windowsCommand
+                      : res.linuxCommand,
+                  )
+                }
+              />
+            ) : container && method === "run" ? (
+              <>
+                <p className="text-sm text-fg-muted">
+                  在客户端机器的 Linux / macOS shell 中执行以下命令。
+                </p>
+                <CommandBlock
+                  title="Docker 运行命令"
+                  value={container.run}
+                  onCopy={() => copy(container.run)}
+                />
+              </>
+            ) : (
+              container && (
+                <>
+                  <p className="text-sm text-fg-muted">
+                    在独立目录执行以下命令，自动下载 compose.yml 并启动客户端。
+                    环境变量可直接在下载后的文件中修改。
+                  </p>
+                  <CommandBlock
+                    title="Compose 一键部署"
+                    value={container.start}
+                    onCopy={() => copy(container.start)}
+                  />
+                  <CommandBlock
+                    title="更新镜像"
+                    value={container.update}
+                    onCopy={() => copy(container.update)}
+                  />
+                </>
+              )
+            )}
             {status?.runtimeStatus && (
               <Textarea readOnly value={status.runtimeStatus} />
             )}

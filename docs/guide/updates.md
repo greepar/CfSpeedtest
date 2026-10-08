@@ -26,9 +26,9 @@ client-updates/
 建议文件命名：
 
 ```text
-CfSpeedtest.Client-win-x64-1.0.1.zip
-CfSpeedtest.Client-linux-x64-1.0.1.zip
-CfSpeedtest.Client-linux-musl-x64-1.0.1.zip
+cfspeedtest-client-win-x64.zip
+cfspeedtest-client-linux-x64.zip
+cfspeedtest-client-linux-musl-x64.zip
 ```
 
 ## 客户端更新行为

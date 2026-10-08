@@ -158,14 +158,14 @@ jobs:
       - name: Verify embedded WebUI (Unix)
         if: matrix.kind == 'Server' && runner.os != 'Windows'
         run: |
-          binary="publish/${{ matrix.kind }}-${{ matrix.rid }}/CfSpeedtest.Server"
+          binary="publish/${{ matrix.kind }}-${{ matrix.rid }}/cftest-server"
           strings "$binary" | grep -F "wwwroot/index.html"
 
       - name: Verify embedded WebUI (Windows)
         if: matrix.kind == 'Server' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          $binary = "publish/${{ matrix.kind }}-${{ matrix.rid }}/CfSpeedtest.Server.exe"
+          $binary = "publish/${{ matrix.kind }}-${{ matrix.rid }}/cftest-server.exe"
           $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($binary))
           if (-not $text.Contains("wwwroot/index.html")) { throw "WebUI not embedded in $binary" }
 
@@ -187,12 +187,17 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd "publish/${{ matrix.kind }}-${{ matrix.rid }}"
+          # Older updaters require the original executable name inside the ZIP.
+          cp "${{ matrix.kind == 'Server' && 'cftest-server' || 'cftest-agent' }}" "CfSpeedtest.${{ matrix.kind }}"
           zip -r "../../${{ matrix.archive_name }}.zip" .
 
       - name: Create archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $publishDir = "publish/${{ matrix.kind }}-${{ matrix.rid }}"
+          $binary = "${{ matrix.kind == 'Server' && 'cftest-server' || 'cftest-agent' }}.exe"
+          Copy-Item -LiteralPath "$publishDir/$binary" -Destination "$publishDir/CfSpeedtest.${{ matrix.kind }}.exe" -Force
           Compress-Archive -Path "publish/${{ matrix.kind }}-${{ matrix.rid }}/*" -DestinationPath "${{ matrix.archive_name }}.zip" -Force
 
       - name: Upload packaged artifact
@@ -239,8 +244,10 @@ jobs:
           mkdir -p "container/${{ matrix.component }}-amd64" "container/${{ matrix.component }}-arm64"
           unzip "artifacts/cfspeedtest-${{ matrix.component }}-linux-musl-x64.zip" -d "container/${{ matrix.component }}-amd64"
           unzip "artifacts/cfspeedtest-${{ matrix.component }}-linux-musl-arm64.zip" -d "container/${{ matrix.component }}-arm64"
-          chmod +x "container/${{ matrix.component }}-amd64/CfSpeedtest.${{ matrix.component == 'server' && 'Server' || 'Client' }}"
-          chmod +x "container/${{ matrix.component }}-arm64/CfSpeedtest.${{ matrix.component == 'server' && 'Server' || 'Client' }}"
+          # Container entrypoints use only the new executable names.
+          rm -f "container/${{ matrix.component }}-amd64/CfSpeedtest.${{ matrix.component == 'server' && 'Server' || 'Client' }}" "container/${{ matrix.component }}-arm64/CfSpeedtest.${{ matrix.component == 'server' && 'Server' || 'Client' }}"
+          chmod +x "container/${{ matrix.component }}-amd64/${{ matrix.component == 'server' && 'cftest-server' || 'cftest-agent' }}"
+          chmod +x "container/${{ matrix.component }}-arm64/${{ matrix.component == 'server' && 'cftest-server' || 'cftest-agent' }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -5,7 +5,7 @@
 示例：
 
 ```bash
-CfSpeedtest.Client.exe --server https://example.com --client-id 117422062b8641f997175a1aefb3501c --isp Unicom --name GX-Cu --auto-update
+cftest-agent.exe --server https://example.com --client-id 117422062b8641f997175a1aefb3501c --isp Unicom --name GX-Cu --auto-update
 ```
 
 ## 心跳与在线状态

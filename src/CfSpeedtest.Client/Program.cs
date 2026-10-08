@@ -121,7 +121,7 @@ while (true)
             Isp = runtimeProfile.Isp,
             Name = runtimeProfile.Name,
             Version = currentVersion,
-            Platform = clientPlatform,
+            Platform = GetReportedPlatform(clientPlatform),
         };
         var regJson = JsonSerializer.Serialize(regReq, AppJsonContext.Default.ClientRegisterRequest);
         var regResp = await transportState.HttpClient.PostAsync(
@@ -497,6 +497,18 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         Console.WriteLine("Extracting update package...");
         ZipFile.ExtractToDirectory(tempFile, stagingDir, true);
 
+        // Preserve the running executable name when applying renamed or legacy packages.
+        var packageExeName = OperatingSystem.IsWindows() ? "cftest-agent.exe" : "cftest-agent";
+        var stagedExe = Path.Combine(stagingDir, packageExeName);
+        if (!File.Exists(stagedExe))
+            stagedExe = Path.Combine(stagingDir, OperatingSystem.IsWindows() ? "CfSpeedtest.Client.exe" : "CfSpeedtest.Client");
+        if (!File.Exists(stagedExe) || new FileInfo(stagedExe).Length == 0)
+            throw new InvalidDataException($"Update package does not contain {packageExeName}");
+        var replacementPath = Path.Combine(stagingDir, Path.GetFileName(currentExe));
+        if (!string.Equals(stagedExe, replacementPath, StringComparison.Ordinal))
+            File.Move(stagedExe, replacementPath, overwrite: true);
+
+
         if (isService && OperatingSystem.IsWindows())
         {
             Console.WriteLine("Scheduling Windows service update and restart...");
@@ -684,6 +696,15 @@ static bool IsValidUpdatePackage(string path, long? expectedLength, string? expe
     return true;
 }
 
+// Keep the native RID for update requests; report container deployment to the UI.
+static string GetReportedPlatform(string nativePlatform)
+{
+    var inContainer = Environment.GetEnvironmentVariable("CF_CONTAINER") == "1"
+        || File.Exists("/.dockerenv")
+        || File.Exists("/run/.containerenv");
+    return inContainer ? "docker" : nativePlatform;
+}
+
 static string DetectClientPlatform()
 {
     if (OperatingSystem.IsWindows())
@@ -818,7 +839,7 @@ static Task StartHeartbeatLoopAsync(
                     Isp = snapshot.Isp,
                     Name = snapshot.Name,
                     Version = currentVersion,
-                    Platform = clientPlatform,
+                    Platform = GetReportedPlatform(clientPlatform),
                     RuntimeStatus = runtimeState.Status,
                     CurrentTaskTotalIps = runtimeState.TotalIps,
                     CurrentTaskTestedIps = runtimeState.TestedIps,
@@ -953,7 +974,7 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
                 Isp = snapshot.Isp,
                 Name = snapshot.Name,
                 Version = currentVersion,
-                Platform = clientPlatform,
+                Platform = GetReportedPlatform(clientPlatform),
                 RuntimeStatus = runtimeState.Status,
                 CurrentTaskTotalIps = runtimeState.TotalIps,
                 CurrentTaskTestedIps = runtimeState.TestedIps,
@@ -1293,9 +1314,9 @@ static void PrintHelp()
     Console.WriteLine("=== Cloudflare IP SpeedTest Client ===");
     Console.WriteLine();
     Console.WriteLine("Usage:");
-    Console.WriteLine("  CfSpeedtest.Client --server <url> [options]");
-    Console.WriteLine("  CfSpeedtest.Client --install --server <url> [options]");
-    Console.WriteLine("  CfSpeedtest.Client --uninstall");
+    Console.WriteLine("  cftest-agent --server <url> [options]");
+    Console.WriteLine("  cftest-agent --install --server <url> [options]");
+    Console.WriteLine("  cftest-agent --uninstall");
     Console.WriteLine();
     Console.WriteLine("Required:");
     Console.WriteLine("  --server <url>              Server URL, e.g. http://127.0.0.1:5000");
@@ -1313,9 +1334,9 @@ static void PrintHelp()
     Console.WriteLine("  --help                      Show this help");
     Console.WriteLine();
     Console.WriteLine("Examples:");
-    Console.WriteLine("  CfSpeedtest.Client --server http://127.0.0.1:5000 --isp Telecom --name node-1");
-    Console.WriteLine("  CfSpeedtest.Client --install --server http://127.0.0.1:5000 --client-id abc --isp Unicom --name node-2");
-    Console.WriteLine("  CfSpeedtest.Client --uninstall");
+    Console.WriteLine("  cftest-agent --server http://127.0.0.1:5000 --isp Telecom --name node-1");
+    Console.WriteLine("  cftest-agent --install --server http://127.0.0.1:5000 --client-id abc --isp Unicom --name node-2");
+    Console.WriteLine("  cftest-agent --uninstall");
 }
 
 static string NormalizeArgKey(string value)

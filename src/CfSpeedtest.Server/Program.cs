@@ -433,6 +433,7 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
         ServerUrl = serverUrl,
         LinuxCommand = linuxCmd,
         WindowsCommand = windowsCmd,
+        ComposeUrl = $"{publicBase}/i/{token}/compose.yml",
     });
 });
 
@@ -511,6 +512,20 @@ app.MapGet("/i/{token}", (HttpContext http, string token, DataStore store) =>
     // 简单返回 text/plain；让 ASP.NET 自己加 charset，避免反代解析重复 charset 时返回 502
     http.Response.Headers["Cache-Control"] = "no-store";
     return Results.Text(script, "text/plain", System.Text.Encoding.UTF8);
+});
+
+// Public token-scoped download for one-command Compose deployment.
+app.MapGet("/i/{token}/compose.yml", (HttpContext http, string token, DataStore store) =>
+{
+    var record = store.GetBootstrapToken(token);
+    if (record is null)
+        return Results.Text("# Bootstrap token not found or already revoked\n", "text/plain", statusCode: StatusCodes.Status404NotFound);
+    if (!record.Consumed && DateTime.UtcNow > record.ExpiresAtUtc)
+        return Results.Text("# Bootstrap token expired\n", "text/plain", statusCode: StatusCodes.Status410Gone);
+
+    http.Response.Headers["Cache-Control"] = "no-store";
+    http.Response.Headers["Content-Disposition"] = "attachment; filename=compose.yml";
+    return Results.Text(BuildBootstrapCompose(record), "application/yaml", System.Text.Encoding.UTF8);
 });
 
 app.MapGet("/api/auth/status", (HttpContext http, DataStore store, WebUiAuthService auth) =>
@@ -1201,7 +1216,7 @@ static ClientInstallScriptResponse? BuildClientCommandResponse(ClientInstallScri
             Platform = platform,
             ScriptType = scriptType,
             ServiceKind = "manual",
-            ScriptFileName = "CfSpeedtest.Client.exe",
+            ScriptFileName = "cftest-agent.exe",
             ScriptSource = "manual",
             Script = BuildManualClientCommand(normalizedServerUrl, normalizedClientId, normalizedIsp, normalizedName, req.DisableAutoUpdate),
         };
@@ -1241,7 +1256,7 @@ static ClientInstallScriptResponse? BuildClientCommandResponse(ClientInstallScri
 
 static string BuildManualClientCommand(string serverUrl, string clientId, string isp, string name, bool disableAutoUpdate)
 {
-    var command = $"CfSpeedtest.Client.exe --server {serverUrl} --client-id {clientId} --isp {isp}";
+    var command = $"cftest-agent.exe --server {serverUrl} --client-id {clientId} --isp {isp}";
     if (!string.IsNullOrWhiteSpace(name))
     {
         command += $" --name {name}";
@@ -1303,7 +1318,7 @@ static string BuildUninstallCommand(string platform)
                               "$installDir=Join-Path $env:ProgramFiles 'CfSpeedtestClient';" +
                               "$nssmExe=Join-Path $installDir 'nssm\\nssm.exe';" +
                               "if(Test-Path -LiteralPath $nssmExe){& $nssmExe stop $serviceName|Out-Null;Start-Sleep -Seconds 2;& $nssmExe remove $serviceName confirm|Out-Null}else{& sc.exe stop $serviceName|Out-Null;Start-Sleep -Seconds 2;& sc.exe delete $serviceName|Out-Null};" +
-                              "Get-Process -Name 'CfSpeedtest.Client' -ErrorAction SilentlyContinue|Stop-Process -Force -ErrorAction SilentlyContinue;" +
+                              "Get-Process -Name 'cftest-agent','CfSpeedtest.Client' -ErrorAction SilentlyContinue|Stop-Process -Force -ErrorAction SilentlyContinue;" +
                               "for($i=0;$i -lt 5 -and (Test-Path -LiteralPath $installDir);$i++){Start-Sleep -Seconds 1;try{Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction Stop}catch{if($i -eq 4){throw}}};" +
                               "Write-Host '[CfSpeedtest] 客户端已卸载'";
         var elevatedCommand = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(uninstallScript));
@@ -1520,6 +1535,26 @@ static string GenerateBootstrapTokenCode(DataStore store)
 
     // Fallback: use guid suffix if collision space exhausted (shouldn't happen)
     return Guid.NewGuid().ToString("N")[..12];
+}
+
+static string BuildBootstrapCompose(BootstrapToken token)
+{
+    // JSON strings are valid YAML scalars; escape Compose's dollar interpolation.
+    static string Quote(string value) => JsonSerializer.Serialize(value.Replace("$", "$$"), AppJsonContext.Default.String);
+    var sb = new System.Text.StringBuilder();
+    sb.AppendLine("services:");
+    sb.AppendLine("  client:");
+    sb.AppendLine("    image: ghcr.io/greepar/cfspeedtest-client:latest");
+    sb.AppendLine($"    container_name: {Quote($"cfspeedtest-client-{token.ClientId}")}");
+    sb.AppendLine("    restart: unless-stopped");
+    sb.AppendLine("    environment:");
+    sb.AppendLine($"      CF_SERVER_URL: {Quote(token.ServerUrl)}");
+    sb.AppendLine($"      CF_ISP: {Quote(token.Isp.ToString())}");
+    sb.AppendLine($"      CF_CLIENT_NAME: {Quote(token.Name)}");
+    sb.AppendLine($"      CF_CLIENT_ID: {Quote(token.ClientId)}");
+    sb.AppendLine("      CF_INTERVAL: \"60\"");
+    sb.AppendLine("      CF_DISABLE_AUTO_UPDATE: \"1\"");
+    return sb.ToString().Replace("\r\n", "\n");
 }
 
 static string BuildBootstrapBashScript(BootstrapToken token, ServerConfig config)

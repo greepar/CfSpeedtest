@@ -1,0 +1,31 @@
+services:
+  server:
+    image: ghcr.io/greepar/cfspeedtest-server:latest
+    container_name: cfspeedtest-server
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      ASPNETCORE_URLS: "http://+:5000"
+    volumes:
+      - cfspeedtest-data:/app/data
+      - cfspeedtest-updates:/app/client-updates
+
+  client:
+    image: ghcr.io/greepar/cfspeedtest-client:latest
+    container_name: cfspeedtest-client
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      CF_SERVER_URL: http://server:5000
+      CF_ISP: Telecom
+      CF_CLIENT_NAME: oci-client
+      # 每个节点使用独立的固定 ID；可替换为 WebUI 生成的客户端 ID。
+      CF_CLIENT_ID: compose-client
+      CF_INTERVAL: "60"
+      CF_DISABLE_AUTO_UPDATE: "1"
+
+volumes:
+  cfspeedtest-data:
+  cfspeedtest-updates:

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\CfSpeedtest.Shared\CfSpeedtest.Shared.csproj" />
@@ -9,9 +9,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>2.1.13</Version>
-    <AssemblyVersion>2.1.13.0</AssemblyVersion>
-    <FileVersion>2.1.13.0</FileVersion>
+    <AssemblyName>cftest-agent</AssemblyName>
+    <Version>2.1.14</Version>
+    <AssemblyVersion>2.1.14.0</AssemblyVersion>
+    <FileVersion>2.1.14.0</FileVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>

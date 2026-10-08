@@ -26,8 +26,8 @@ features:
 
 CfSpeedtest 由三个 .NET 10 项目组成：
 
-- `CfSpeedtest.Server`：服务端和 WebUI
-- `CfSpeedtest.Client`：NativeAOT 客户端
+- `cftest-server`：服务端和 WebUI
+- `cftest-agent`：NativeAOT 客户端
 - `CfSpeedtest.Shared`：共享模型与 JSON 上下文
 
 如果你要快速上手，建议按以下顺序阅读：

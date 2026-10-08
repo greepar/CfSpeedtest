@@ -92,17 +92,38 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --isp Mobile --name BJ-Mobile --once
 ```
 
-## WebUI 使用说明
+## OCI 容器 / Compose 部署
 
-## Docker Compose
+项目使用标准 Compose 配置 `compose.yml`，支持 Docker Compose 和 Podman Compose。
+镜像标签、端口和客户端环境变量均可直接在文件中修改，无需额外创建 `.env`。
+例如，在 `client.environment` 中设置 `CF_SERVER_URL`、`CF_ISP`、`CF_CLIENT_NAME` 和 `CF_CLIENT_ID`；
+`CF_DISABLE_AUTO_UPDATE: "1"` 禁用容器内自动更新，容器升级通过拉取新镜像完成。
+固定的 `CF_CLIENT_ID` 用于在重建容器后复用节点，每个客户端应使用不同的 ID。
+
+Docker：
 
 ```bash
-docker compose up -d
-docker compose pull && docker compose up -d
-IMAGE_TAG=v2.1.11 docker compose up -d
+docker compose -f compose.yml up -d
+docker compose -f compose.yml pull && docker compose -f compose.yml up -d
 ```
 
-需要自定义配置时，复制 `docker-compose.example.env` 为 `.env`。
+Podman（需安装 Compose provider，例如 `podman-compose`）：
+
+```bash
+podman compose -f compose.yml up -d
+podman compose -f compose.yml pull && podman compose -f compose.yml up -d
+```
+
+若需固定版本，直接修改 `compose.yml` 中两个 `image` 的标签。
+旧版 `docker-compose.yml` 和 `docker-compose.example.env` 的配置可迁移到 `compose.yml` 的对应字段。
+镜像标签和宿主机端口分别在 `image`、`ports` 中修改，客户端参数在 `environment` 中修改。
+
+只部署客户端时，在 WebUI 的“客户端 → 一键部署”中选择顶部“Docker”，再选择“直接命令”或“Compose”，
+填写容器可访问的服务端地址并生成配置。页面提供 Docker 运行命令，或通过 `curl` 下载客户端专属 `compose.yml` 后执行 `docker compose` 的一键部署命令，以及镜像更新命令。Compose 下载链接在客户端上线前有效期为 30 分钟，建议在独立目录执行；环境变量直接保存在下载的文件中。
+生成的配置会携带已加入白名单的客户端 ID，可直接连接现有服务端。
+同一套服务端和客户端 Compose 使用 `http://server:5000`；远程客户端应填写可访问的服务端域名或 IP。
+
+## WebUI 使用说明
 
 WebUI 顶部有 5 个主页面：
 
@@ -356,15 +377,19 @@ src/CfSpeedtest.Server/Services/DnsUpdateService.cs
 
 ## NativeAOT 发布
 
+发布的程序名称为 `cftest-server`（服务端）和 `cftest-agent`（客户端）；Windows 对应 `.exe`，框架依赖部署对应 `.dll`。项目目录和 Release 压缩包名称保持原有名称。
+
+Release 压缩包同时包含相同内容的 `CfSpeedtest.Server` / `CfSpeedtest.Client` 兼容副本（Windows 对应 `.exe`），供旧版更新器覆盖原有程序。已有服务可以继续使用旧路径运行和更新，新部署使用 `cftest-server` / `cftest-agent`。容器镜像仅保留新文件名。
+
 NativeAOT 单文件服务端会默认每 6 小时检查一次 GitHub 最新 Release。发现新版本后会下载当前平台的 Server ZIP、替换当前实际运行的可执行文件并重启，不要求可执行文件使用固定名称；systemd/OpenRC 托管时由服务管理器重新拉起。
 
-Docker 部署不会在容器内自更新，请使用：
+OCI 容器部署通过更新镜像升级，请使用（Podman 将 `docker` 替换为 `podman`）：
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose -f compose.yml pull && docker compose -f compose.yml up -d
 ```
 
-使用 `dotnet CfSpeedtest.Server.dll` 的框架依赖部署不会自动覆盖；服务端自动更新仅支持 Release 中的 NativeAOT 单文件程序。开关、检查间隔、GitHub 仓库及 GH Proxy 可在 WebUI 配置页调整，也可点击“检查更新”，发现新版本后再点击“立即更新”。
+使用 `dotnet cftest-server.dll` 的框架依赖部署不会自动覆盖；服务端自动更新仅支持 Release 中的 NativeAOT 单文件程序。开关、检查间隔、GitHub 仓库及 GH Proxy 可在 WebUI 配置页调整，也可点击“检查更新”，发现新版本后再点击“立即更新”。
 
 ### Windows x64
 

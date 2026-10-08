@@ -18,12 +18,12 @@ dotnet publish src/CfSpeedtest.Client/CfSpeedtest.Client.csproj -c Release -r li
 echo
 echo "=== Build Complete ==="
 echo "Server:              publish/server/"
-echo "Client (Linux x64):  publish/client-linux-x64/CfSpeedtest.Client"
-echo "Client (Linux ARM):  publish/client-linux-arm64/CfSpeedtest.Client"
+echo "Client (Linux x64):  publish/client-linux-x64/cftest-agent"
+echo "Client (Linux ARM):  publish/client-linux-arm64/cftest-agent"
 echo
 echo "=== Usage ==="
-echo "Server:  dotnet publish/server/CfSpeedtest.Server.dll"
+echo "Server:  ./publish/server/cftest-server"
 echo "         WebUI: http://localhost:5000"
 echo
-echo "Client:  ./publish/client-linux-x64/CfSpeedtest.Client --server http://SERVER:5000 --isp Telecom --name MyNode"
+echo "Client:  ./publish/client-linux-x64/cftest-agent --server http://SERVER:5000 --isp Telecom --name MyNode"
 echo "         Options: --isp Telecom/Unicom/Mobile  --interval 300  --once  --name NodeName"

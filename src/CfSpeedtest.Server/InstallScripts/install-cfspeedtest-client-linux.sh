@@ -166,8 +166,13 @@ curl -fL --retry 3 --connect-timeout 15 -o "$ZIP_PATH" "$DOWNLOAD_URL"
 
 log "解压客户端..."
 unzip -oq "$ZIP_PATH" -d "$STAGE_DIR"
+# Accept packages published before the executable rename.
+if [ ! -f "$STAGE_DIR/cftest-agent" ] && [ -f "$STAGE_DIR/CfSpeedtest.Client" ]; then
+  mv "$STAGE_DIR/CfSpeedtest.Client" "$STAGE_DIR/cftest-agent"
+fi
+[ -f "$STAGE_DIR/cftest-agent" ] || fail "客户端包缺少 cftest-agent"
 cp -fR "$STAGE_DIR"/. "$INSTALL_DIR"/
-chmod +x "$INSTALL_DIR/CfSpeedtest.Client"
+chmod +x "$INSTALL_DIR/cftest-agent"
 
 case "$SERVICE_MANAGER" in
   systemd)
@@ -181,7 +186,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/CfSpeedtest.Client --server $SERVER_URL --client-id $CLIENT_ID --isp $ISP --name $CLIENT_NAME --service
+ExecStart=$INSTALL_DIR/cftest-agent --server $SERVER_URL --client-id $CLIENT_ID --isp $ISP --name $CLIENT_NAME --service
 Restart=always
 RestartSec=5
 
@@ -198,7 +203,7 @@ EOF
 #!/sbin/openrc-run
 name="CfSpeedtest Client"
 description="CfSpeedtest native client service"
-command="$INSTALL_DIR/CfSpeedtest.Client"
+command="$INSTALL_DIR/cftest-agent"
 command_args="--server $SERVER_URL --client-id $CLIENT_ID --isp $ISP --name $CLIENT_NAME --service"
 supervisor="supervise-daemon"
 command_background="yes"
@@ -223,7 +228,7 @@ USE_PROCD=1
 
 start_service() {
   procd_open_instance
-  procd_set_param command $INSTALL_DIR/CfSpeedtest.Client --server $SERVER_URL --client-id $CLIENT_ID --isp $ISP --name $CLIENT_NAME --service
+  procd_set_param command $INSTALL_DIR/cftest-agent --server $SERVER_URL --client-id $CLIENT_ID --isp $ISP --name $CLIENT_NAME --service
   procd_set_param respawn 3600 5 5
   procd_set_param stdout 1
   procd_set_param stderr 1

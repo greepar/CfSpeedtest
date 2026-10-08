@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+export CF_CONTAINER=1
+
 set -- \
   --server "${CF_SERVER_URL:-http://server:5000}" \
   --isp "${CF_ISP:-Telecom}" \
@@ -14,4 +16,4 @@ if [ -n "${CF_DISABLE_AUTO_UPDATE:-}" ]; then
   set -- "$@" --disable-auto-update
 fi
 
-exec /app/CfSpeedtest.Client "$@"
+exec /app/cftest-agent "$@"

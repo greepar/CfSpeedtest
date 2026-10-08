@@ -90,7 +90,7 @@ function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath)
     }
 
     Write-Log 'Killing any leftover client processes from the target install path...'
-    Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
+    Get-CimInstance Win32_Process -Filter "Name = 'cftest-agent.exe' OR Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $ExePath, [StringComparison]::OrdinalIgnoreCase) } |
         ForEach-Object {
             Write-Log "Stopping leftover client process PID=$($_.ProcessId)..."
@@ -99,7 +99,7 @@ function Stop-ExistingClient([string]$Name, [string]$ExePath, [string]$NssmPath)
 
     $deadline = (Get-Date).AddSeconds(30)
     do {
-        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
+        $leftovers = @(Get-CimInstance Win32_Process -Filter "Name = 'cftest-agent.exe' OR Name = 'CfSpeedtest.Client.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $ExePath, [StringComparison]::OrdinalIgnoreCase) })
         if ($leftovers.Count -eq 0) { return }
         Start-Sleep -Seconds 1
@@ -131,7 +131,7 @@ $zipPath = Join-Path $env:TEMP $assetName
 $stageDir = Join-Path $env:TEMP ("cfspeedtest-client-" + [guid]::NewGuid().ToString('N'))
 $installDir = Join-Path $env:ProgramFiles 'CfSpeedtestClient'
 $serviceName = 'CfSpeedtestClient'
-$exePath = Join-Path $installDir 'CfSpeedtest.Client.exe'
+$exePath = Join-Path $installDir 'cftest-agent.exe'
 $nssmDir = Join-Path $installDir 'nssm'
 $nssmZipPath = Join-Path $env:TEMP 'nssm-2.24.zip'
 $nssmStageDir = Join-Path $env:TEMP ("nssm-" + [guid]::NewGuid().ToString('N'))
@@ -149,7 +149,15 @@ Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
 
 Write-Log 'Extracting client package...'
 Expand-Archive -Path $zipPath -DestinationPath $stageDir -Force
+# Accept packages published before the executable rename.
+$stagedExe = Join-Path $stageDir 'cftest-agent.exe'
+$legacyExe = Join-Path $stageDir 'CfSpeedtest.Client.exe'
+if (-not (Test-Path $stagedExe) -and (Test-Path $legacyExe)) {
+    Move-Item -LiteralPath $legacyExe -Destination $stagedExe -Force
+}
+if (-not (Test-Path $stagedExe)) { throw 'Client package does not contain cftest-agent.exe' }
 Stop-ExistingClient -Name $serviceName -ExePath $exePath -NssmPath $nssmExe
+Stop-ExistingClient -Name $serviceName -ExePath (Join-Path $installDir 'CfSpeedtest.Client.exe') -NssmPath $nssmExe
 Copy-Item -Path (Join-Path $stageDir '*') -Destination $installDir -Recurse -Force
 
 Write-Log 'Preparing NSSM...'

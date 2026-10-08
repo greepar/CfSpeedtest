@@ -19,15 +19,15 @@ if errorlevel 1 goto :error
 echo.
 echo === Build Complete ===
 echo Server:           publish\server\
-echo Client (Win x64): publish\client-win-x64\CfSpeedtest.Client.exe
-echo Client (Linux):   publish\client-linux-x64\CfSpeedtest.Client
+echo Client (Win x64): publish\client-win-x64\cftest-agent.exe
+echo Client (Linux):   publish\client-linux-x64\cftest-agent
 echo.
 echo === Usage ===
-echo Server:  dotnet publish\server\CfSpeedtest.Server.dll
-echo          or: cd publish\server ^&^& dotnet CfSpeedtest.Server.dll
+echo Server:  publish\server\cftest-server.exe
+echo          or: cd publish\server ^&^& cftest-server.exe
 echo          WebUI: http://localhost:5000
 echo.
-echo Client:  publish\client-win-x64\CfSpeedtest.Client.exe --server http://SERVER:5000 --isp Telecom --name MyNode
+echo Client:  publish\client-win-x64\cftest-agent.exe --server http://SERVER:5000 --isp Telecom --name MyNode
 echo          Options: --isp Telecom/Unicom/Mobile  --interval 300  --once  --name NodeName
 goto :end
 

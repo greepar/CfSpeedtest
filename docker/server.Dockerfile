@@ -8,4 +8,4 @@ COPY container/server-${TARGETARCH}/ /app/
 ENV ASPNETCORE_URLS=http://+:5000
 EXPOSE 5000
 VOLUME ["/app/data", "/app/client-updates"]
-ENTRYPOINT ["/app/CfSpeedtest.Server"]
+ENTRYPOINT ["/app/cftest-server"]

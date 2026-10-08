@@ -220,6 +220,7 @@ export interface BootstrapTokenCreateResponse {
   serverUrl: string;
   linuxCommand: string;
   windowsCommand: string;
+  composeUrl: string;
 }
 
 export interface BootstrapTokenStatus {
