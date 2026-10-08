@@ -504,6 +504,8 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
             stagedExe = Path.Combine(stagingDir, OperatingSystem.IsWindows() ? "CfSpeedtest.Client.exe" : "CfSpeedtest.Client");
         if (!File.Exists(stagedExe) || new FileInfo(stagedExe).Length == 0)
             throw new InvalidDataException($"Update package does not contain {packageExeName}");
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            File.SetUnixFileMode(stagedExe, File.GetUnixFileMode(currentExe));
         var replacementPath = Path.Combine(stagingDir, Path.GetFileName(currentExe));
         if (!string.Equals(stagedExe, replacementPath, StringComparison.Ordinal))
             File.Move(stagedExe, replacementPath, overwrite: true);
@@ -526,9 +528,9 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
         stagingDir = null;
         downloadDir = null;
 
-        if (isService)
+        if (isService || IsContainer())
         {
-            Console.WriteLine("Update installed. Please restart the service or service manager to load the new version.");
+            Console.WriteLine("Update installed. Exiting for the service manager or container runtime to restart.");
             Environment.Exit(0);
         }
         else
@@ -697,12 +699,14 @@ static bool IsValidUpdatePackage(string path, long? expectedLength, string? expe
 }
 
 // Keep the native RID for update requests; report container deployment to the UI.
+static bool IsContainer() =>
+    Environment.GetEnvironmentVariable("CF_CONTAINER") == "1"
+    || string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
+    || File.Exists("/.dockerenv") || File.Exists("/run/.containerenv");
+
 static string GetReportedPlatform(string nativePlatform)
 {
-    var inContainer = Environment.GetEnvironmentVariable("CF_CONTAINER") == "1"
-        || File.Exists("/.dockerenv")
-        || File.Exists("/run/.containerenv");
-    return inContainer ? "docker" : nativePlatform;
+    return IsContainer() ? "docker" : nativePlatform;
 }
 
 static string DetectClientPlatform()

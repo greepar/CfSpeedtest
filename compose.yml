@@ -24,7 +24,7 @@ services:
       # 每个节点使用独立的固定 ID；可替换为 WebUI 生成的客户端 ID。
       CF_CLIENT_ID: compose-client
       CF_INTERVAL: "60"
-      CF_DISABLE_AUTO_UPDATE: "1"
+      CF_DISABLE_AUTO_UPDATE: "0"
 
 volumes:
   cfspeedtest-data:

@@ -265,9 +265,6 @@ public sealed class ServerUpdateService(
 
     private static void EnsureUpdateSupported()
     {
-        if (IsContainer())
-            throw new InvalidOperationException("Docker 部署不能在线更新，请更新容器镜像");
-
         var currentExe = Environment.ProcessPath;
         if (RuntimeFeature.IsDynamicCodeSupported || string.IsNullOrWhiteSpace(currentExe) || !File.Exists(currentExe))
             throw new InvalidOperationException("当前不是 NativeAOT 单文件进程，不能执行在线更新");
@@ -278,7 +275,7 @@ public sealed class ServerUpdateService(
         var replacement = currentExe + ".update";
         File.Copy(stagedExe, replacement, overwrite: true);
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            File.SetUnixFileMode(replacement, File.GetUnixFileMode(stagedExe));
+            File.SetUnixFileMode(replacement, File.GetUnixFileMode(currentExe));
         File.Move(replacement, currentExe, overwrite: true);
     }
 
@@ -347,13 +344,13 @@ public sealed class ServerUpdateService(
 
         if (OperatingSystem.IsLinux())
         {
-            if (RuntimeInformation.RuntimeIdentifier.Contains("musl", StringComparison.OrdinalIgnoreCase))
-                throw new PlatformNotSupportedException("No musl server update package is published");
+            var prefix = RuntimeInformation.RuntimeIdentifier.Contains("musl", StringComparison.OrdinalIgnoreCase)
+                ? "linux-musl" : "linux";
 
             return architecture switch
             {
-                Architecture.X64 => "linux-x64",
-                Architecture.Arm64 => "linux-arm64",
+                Architecture.X64 => $"{prefix}-x64",
+                Architecture.Arm64 => $"{prefix}-arm64",
                 _ => throw new PlatformNotSupportedException($"No Linux server update package is published for {architecture}"),
             };
         }
@@ -392,9 +389,11 @@ public sealed class ServerUpdateService(
 
     private static bool IsContainer() =>
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase) ||
-        File.Exists("/.dockerenv");
+        Environment.GetEnvironmentVariable("CF_CONTAINER") == "1" ||
+        File.Exists("/.dockerenv") || File.Exists("/run/.containerenv");
 
     private static bool IsSupervised() =>
+        IsContainer() ||
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INVOCATION_ID")) ||
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RC_SVCNAME")) ||
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("XPC_SERVICE_NAME")) ||

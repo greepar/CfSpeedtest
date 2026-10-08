@@ -12,7 +12,7 @@ export function containerDeploy(res: BootstrapTokenCreateResponse) {
     CF_CLIENT_NAME: res.name,
     CF_CLIENT_ID: res.clientId,
     CF_INTERVAL: "60",
-    CF_DISABLE_AUTO_UPDATE: "1",
+    CF_DISABLE_AUTO_UPDATE: res.disableAutoUpdate ? "1" : "0",
   };
   return {
     run: [

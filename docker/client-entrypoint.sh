@@ -12,7 +12,7 @@ set -- \
 if [ -n "${CF_CLIENT_ID:-}" ]; then
   set -- "$@" --client-id "$CF_CLIENT_ID"
 fi
-if [ -n "${CF_DISABLE_AUTO_UPDATE:-}" ]; then
+if [ "${CF_DISABLE_AUTO_UPDATE:-0}" = "1" ]; then
   set -- "$@" --disable-auto-update
 fi
 

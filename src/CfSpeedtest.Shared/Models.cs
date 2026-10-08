@@ -363,6 +363,7 @@ public class BootstrapTokenCreateResponse
 
     /// <summary>客户端 Compose 配置下载地址</summary>
     public string ComposeUrl { get; set; } = string.Empty;
+    public bool DisableAutoUpdate { get; set; }
 }
 
 /// <summary>

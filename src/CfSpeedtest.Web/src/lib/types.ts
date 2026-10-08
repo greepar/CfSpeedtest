@@ -221,6 +221,7 @@ export interface BootstrapTokenCreateResponse {
   linuxCommand: string;
   windowsCommand: string;
   composeUrl: string;
+  disableAutoUpdate: boolean;
 }
 
 export interface BootstrapTokenStatus {

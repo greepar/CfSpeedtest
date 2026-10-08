@@ -584,7 +584,7 @@ function DeployModal({
         isp,
         serverUrl,
         includeProxy: method === "native" && includeProxy,
-        disableAutoUpdate: method !== "native" || disableAutoUpdate,
+        disableAutoUpdate,
         clientId: client?.clientId || undefined,
       },
     );
@@ -708,25 +708,25 @@ function DeployModal({
               </Select>
             </Field>
           )}
-          {method === "native" && (
-            <div className="grid gap-3 text-sm sm:col-span-2 sm:grid-cols-2">
+          <div className="grid gap-3 text-sm sm:col-span-2 sm:grid-cols-2">
+            {method === "native" && (
               <label className="flex items-center justify-between rounded-lg border border-border p-3">
                 携带 GH Proxy
                 <Switch checked={includeProxy} onChange={setIncludeProxy} />
               </label>
-              <label className="flex items-center justify-between rounded-lg border border-border p-3">
-                禁用自动更新
-                <Switch
-                  checked={disableAutoUpdate}
-                  onChange={setDisableAutoUpdate}
-                />
-              </label>
-            </div>
-          )}
+            )}
+            <label className={`flex items-center justify-between rounded-lg border border-border p-3 ${method !== "native" ? "sm:col-span-2" : ""}`}>
+              禁用自动更新
+              <Switch
+                checked={disableAutoUpdate}
+                onChange={setDisableAutoUpdate}
+              />
+            </label>
+          </div>
         </div>
         {method !== "native" && (
           <p className="rounded-lg bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-fg-muted">
-            容器通过更新镜像升级，已禁用容器内自动更新。
+            容器内默认允许自动更新，需在服务端启用客户端更新。安装后由 Docker 重启容器；重建容器后使用镜像中的版本。
           </p>
         )}
         {res && (

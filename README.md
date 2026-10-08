@@ -97,7 +97,7 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 项目使用标准 Compose 配置 `compose.yml`，支持 Docker Compose 和 Podman Compose。
 镜像标签、端口和客户端环境变量均可直接在文件中修改，无需额外创建 `.env`。
 例如，在 `client.environment` 中设置 `CF_SERVER_URL`、`CF_ISP`、`CF_CLIENT_NAME` 和 `CF_CLIENT_ID`；
-`CF_DISABLE_AUTO_UPDATE: "1"` 禁用容器内自动更新，容器升级通过拉取新镜像完成。
+容器内默认允许客户端自更新，需在服务端启用客户端更新；设置 `CF_DISABLE_AUTO_UPDATE: "1"` 可禁用客户端自更新。更新后程序退出，由 `restart: unless-stopped` 自动重启容器。
 固定的 `CF_CLIENT_ID` 用于在重建容器后复用节点，每个客户端应使用不同的 ID。
 
 Docker：
@@ -383,7 +383,7 @@ Release 压缩包同时包含相同内容的 `CfSpeedtest.Server` / `CfSpeedtest
 
 NativeAOT 单文件服务端会默认每 6 小时检查一次 GitHub 最新 Release。发现新版本后会下载当前平台的 Server ZIP、替换当前实际运行的可执行文件并重启，不要求可执行文件使用固定名称；systemd/OpenRC 托管时由服务管理器重新拉起。
 
-OCI 容器部署通过更新镜像升级，请使用（Podman 将 `docker` 替换为 `podman`）：
+OCI 容器中的服务端和客户端支持程序自更新，更新后退出并由容器的 `restart: unless-stopped` 策略重新启动。服务端使用 WebUI 的自动更新开关，客户端默认允许自更新，并受服务端客户端更新开关控制。更新写入容器的可写层；删除或重建容器后会使用镜像中的版本。也可更新镜像升级（Podman 将 `docker` 替换为 `podman`）：
 
 ```bash
 docker compose -f compose.yml pull && docker compose -f compose.yml up -d

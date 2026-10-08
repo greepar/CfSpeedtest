@@ -434,6 +434,7 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
         LinuxCommand = linuxCmd,
         WindowsCommand = windowsCmd,
         ComposeUrl = $"{publicBase}/i/{token}/compose.yml",
+        DisableAutoUpdate = record.DisableAutoUpdate,
     });
 });
 
@@ -1553,7 +1554,7 @@ static string BuildBootstrapCompose(BootstrapToken token)
     sb.AppendLine($"      CF_CLIENT_NAME: {Quote(token.Name)}");
     sb.AppendLine($"      CF_CLIENT_ID: {Quote(token.ClientId)}");
     sb.AppendLine("      CF_INTERVAL: \"60\"");
-    sb.AppendLine("      CF_DISABLE_AUTO_UPDATE: \"1\"");
+    sb.AppendLine($"      CF_DISABLE_AUTO_UPDATE: \"{(token.DisableAutoUpdate ? "1" : "0")}\"");
     return sb.ToString().Replace("\r\n", "\n");
 }
 
