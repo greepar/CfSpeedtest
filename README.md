@@ -100,6 +100,13 @@ dotnet run --project src/CfSpeedtest.Client -- --server http://127.0.0.1:5000 --
 容器内默认允许客户端自更新，需在服务端启用客户端更新；设置 `CF_DISABLE_AUTO_UPDATE: "1"` 可禁用客户端自更新。更新后程序退出，由 `restart: unless-stopped` 自动重启容器。
 固定的 `CF_CLIENT_ID` 用于在重建容器后复用节点，每个客户端应使用不同的 ID。
 
+镜像代理可在客户端部署弹窗中填写，例如 `docker.qwq.lu`，直接命令和下载的 Compose 配置都会使用 `docker.qwq.lu/ghcr.io/greepar/cfspeedtest-client:latest`。留空时直接使用 GHCR。服务端与客户端一起部署时，可在项目目录的 `.env` 中写入 `DOCKER_PROXY=docker.qwq.lu`，或给每次 Compose 命令设置相同变量：
+
+```bash
+DOCKER_PROXY=docker.qwq.lu docker compose -f compose.yml pull
+DOCKER_PROXY=docker.qwq.lu docker compose -f compose.yml up -d
+```
+
 Docker：
 
 ```bash
@@ -379,7 +386,7 @@ src/CfSpeedtest.Server/Services/DnsUpdateService.cs
 
 发布的程序名称为 `cftest-server`（服务端）和 `cftest-agent`（客户端）；Windows 对应 `.exe`，框架依赖部署对应 `.dll`。项目目录和 Release 压缩包名称保持原有名称。
 
-Release 压缩包同时包含相同内容的 `CfSpeedtest.Server` / `CfSpeedtest.Client` 兼容副本（Windows 对应 `.exe`），供旧版更新器覆盖原有程序。已有服务可以继续使用旧路径运行和更新，新部署使用 `cftest-server` / `cftest-agent`。容器镜像仅保留新文件名。
+Release 压缩包仅包含新名称的程序，不再提供 `CfSpeedtest.Server` / `CfSpeedtest.Client` 兼容副本。升级到 v2.1.14 或更高版本的更新器后，即使已有服务仍使用旧路径运行，也能安装新文件名的更新包。更早版本需先升级到 v2.1.14 / v2.1.15，或手动安装新版。
 
 NativeAOT 单文件服务端会默认每 6 小时检查一次 GitHub 最新 Release。发现新版本后会下载当前平台的 Server ZIP、替换当前实际运行的可执行文件并重启，不要求可执行文件使用固定名称；systemd/OpenRC 托管时由服务管理器重新拉起。
 

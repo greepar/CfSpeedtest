@@ -288,6 +288,7 @@ public class WebUiAuthConfig
 /// </summary>
 public class BootstrapToken
 {
+    public string DockerProxy { get; set; } = string.Empty;
     /// <summary>短码 token（命令里的 /i/{token}）</summary>
     public string Token { get; set; } = string.Empty;
 
@@ -321,6 +322,7 @@ public class BootstrapToken
 /// </summary>
 public class BootstrapTokenCreateRequest
 {
+    public string? DockerProxy { get; set; }
     /// <summary>客户端备注名，可空。空时自动生成</summary>
     public string? Name { get; set; }
 
@@ -348,6 +350,7 @@ public class BootstrapTokenCreateRequest
 /// </summary>
 public class BootstrapTokenCreateResponse
 {
+    public string ContainerImage { get; set; } = string.Empty;
     public string Token { get; set; } = string.Empty;
     public string ClientId { get; set; } = string.Empty;
     public IspType Isp { get; set; }

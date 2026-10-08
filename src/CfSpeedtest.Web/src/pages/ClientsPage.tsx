@@ -548,6 +548,7 @@ function DeployModal({
   const [method, setMethod] = useState<"native" | "run" | "compose">("native");
   const [includeProxy, setIncludeProxy] = useState(true);
   const [disableAutoUpdate, setDisableAutoUpdate] = useState(false);
+  const [dockerProxy, setDockerProxy] = useState("");
   const [res, setRes] = useState<BootstrapTokenCreateResponse | null>(null);
   const [status, setStatus] = useState<BootstrapTokenStatus | null>(null);
   useEffect(() => {
@@ -585,6 +586,7 @@ function DeployModal({
         serverUrl,
         includeProxy: method === "native" && includeProxy,
         disableAutoUpdate,
+        dockerProxy: platform === "docker" ? dockerProxy : "",
         clientId: client?.clientId || undefined,
       },
     );
@@ -707,6 +709,18 @@ function DeployModal({
                 <option value="compose">Compose</option>
               </Select>
             </Field>
+          )}
+          {platform === "docker" && (
+            <div className="sm:col-span-2">
+              <Field label="Docker 镜像代理（可选）" hint="填写代理域名，例如 docker.qwq.lu；留空直接从 GHCR 拉取。">
+                <Input
+                  className="h-10"
+                  value={dockerProxy}
+                  onChange={(e) => setDockerProxy(e.target.value)}
+                  placeholder="docker.qwq.lu"
+                />
+              </Field>
+            </div>
           )}
           <div className="grid gap-3 text-sm sm:col-span-2 sm:grid-cols-2">
             {method === "native" && (

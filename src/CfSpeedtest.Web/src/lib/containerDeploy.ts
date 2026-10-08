@@ -22,7 +22,7 @@ export function containerDeploy(res: BootstrapTokenCreateResponse) {
       ...Object.entries(environment).map(
         ([key, value]) => `  -e ${shellQuote(`${key}=${value}`)}`,
       ),
-      `  ${image}`,
+      `  ${shellQuote(res.containerImage || image)}`,
     ].join(" \\\n"),
     start: `curl -fL ${shellQuote(res.composeUrl)} -o compose.yml && docker compose -f compose.yml up -d`,
     update:

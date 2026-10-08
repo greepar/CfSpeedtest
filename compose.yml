@@ -1,6 +1,6 @@
 services:
   server:
-    image: ghcr.io/greepar/cfspeedtest-server:latest
+    image: ${DOCKER_PROXY:+${DOCKER_PROXY}/}ghcr.io/greepar/cfspeedtest-server:latest
     container_name: cfspeedtest-server
     restart: unless-stopped
     ports:
@@ -12,7 +12,7 @@ services:
       - cfspeedtest-updates:/app/client-updates
 
   client:
-    image: ghcr.io/greepar/cfspeedtest-client:latest
+    image: ${DOCKER_PROXY:+${DOCKER_PROXY}/}ghcr.io/greepar/cfspeedtest-client:latest
     container_name: cfspeedtest-client
     restart: unless-stopped
     depends_on:

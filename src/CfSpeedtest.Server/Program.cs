@@ -359,6 +359,9 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
     if (!Enum.TryParse<IspType>(ispStr, true, out var isp))
         return ApiResponse<BootstrapTokenCreateResponse>.Fail("Invalid ISP");
 
+    if (!TryNormalizeDockerProxy(req.DockerProxy, out var dockerProxy))
+        return ApiResponse<BootstrapTokenCreateResponse>.Fail("Docker 镜像代理地址无效，请填写域名或域名/路径，不含账号、参数或空格");
+
     store.CleanupBootstrapTokens();
 
     string clientId;
@@ -413,6 +416,7 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
         ServerUrl = serverUrl,
         IncludeProxy = req.IncludeProxy,
         DisableAutoUpdate = req.DisableAutoUpdate,
+        DockerProxy = dockerProxy,
         CreatedAtUtc = DateTime.UtcNow,
         ExpiresAtUtc = DateTime.UtcNow.AddMinutes(30),
         Consumed = false,
@@ -435,6 +439,7 @@ app.MapPost("/api/bootstrap/create", (HttpContext http, BootstrapTokenCreateRequ
         WindowsCommand = windowsCmd,
         ComposeUrl = $"{publicBase}/i/{token}/compose.yml",
         DisableAutoUpdate = record.DisableAutoUpdate,
+        ContainerImage = BuildContainerImage(record.DockerProxy),
     });
 });
 
@@ -1538,6 +1543,24 @@ static string GenerateBootstrapTokenCode(DataStore store)
     return Guid.NewGuid().ToString("N")[..12];
 }
 
+static bool TryNormalizeDockerProxy(string? value, out string prefix)
+{
+    prefix = (value ?? string.Empty).Trim().TrimEnd('/');
+    if (prefix.Length == 0) return true;
+    if (prefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) prefix = prefix[8..];
+    else if (prefix.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) prefix = prefix[7..];
+    prefix = prefix.ToLowerInvariant();
+    if (!System.Text.RegularExpressions.Regex.IsMatch(prefix, @"^[a-z0-9][a-z0-9._:/-]*$")) return false;
+    if (!Uri.TryCreate("https://" + prefix, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Host)) return false;
+    return string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment)
+        && !prefix.Split('/').Skip(1).Any(part => part is "." or ".." || part.Contains(':'))
+        && !prefix.Contains("//", StringComparison.Ordinal);
+}
+
+static string BuildContainerImage(string dockerProxy) =>
+    (string.IsNullOrWhiteSpace(dockerProxy) ? string.Empty : dockerProxy.TrimEnd('/') + "/")
+    + "ghcr.io/greepar/cfspeedtest-client:latest";
+
 static string BuildBootstrapCompose(BootstrapToken token)
 {
     // JSON strings are valid YAML scalars; escape Compose's dollar interpolation.
@@ -1545,7 +1568,7 @@ static string BuildBootstrapCompose(BootstrapToken token)
     var sb = new System.Text.StringBuilder();
     sb.AppendLine("services:");
     sb.AppendLine("  client:");
-    sb.AppendLine("    image: ghcr.io/greepar/cfspeedtest-client:latest");
+    sb.AppendLine($"    image: {Quote(BuildContainerImage(token.DockerProxy))}");
     sb.AppendLine($"    container_name: {Quote($"cfspeedtest-client-{token.ClientId}")}");
     sb.AppendLine("    restart: unless-stopped");
     sb.AppendLine("    environment:");

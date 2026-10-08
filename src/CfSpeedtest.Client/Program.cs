@@ -12,7 +12,6 @@ using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using CfSpeedtest.Shared;
 
 // ============================================================
@@ -99,13 +98,6 @@ if (!string.IsNullOrWhiteSpace(currentClientId))
 
 const int StartupRetryDelaySeconds = 5;
 
-// NativeAOT-safe JSON options using source generators
-var jsonOpts = new JsonSerializerOptions
-{
-    PropertyNameCaseInsensitive = true,
-    TypeInfoResolverChain = { AppJsonContext.Default }
-};
-
 // ===== 注册客户端 =====
 Console.WriteLine("[1] Registering with server...");
 runtimeState.AppendLog("Registering with server");
@@ -123,13 +115,13 @@ while (true)
             Version = currentVersion,
             Platform = GetReportedPlatform(clientPlatform),
         };
-        var regJson = JsonSerializer.Serialize(regReq, AppJsonContext.Default.ClientRegisterRequest);
-        var regResp = await transportState.HttpClient.PostAsync(
+        var regJson = JsonSerializer.Serialize(regReq, ClientJsonContext.Default.ClientRegisterRequest);
+        using var regResp = await transportState.HttpClient.PostAsync(
             $"{serverUrl}/api/client/register",
             new StringContent(regJson, Encoding.UTF8, "application/json"));
         regResp.EnsureSuccessStatusCode();
-        var regBody = await regResp.Content.ReadAsStringAsync();
-        var regResult = JsonSerializer.Deserialize(regBody, AppJsonContext.Default.ApiResponseClientRegisterResponse);
+        using var regBody = await regResp.Content.ReadAsStreamAsync();
+        var regResult = await JsonSerializer.DeserializeAsync(regBody, ClientJsonContext.Default.ApiResponseClientRegisterResponse);
         if (regResult?.Success != true || regResult.Data is null)
         {
             Console.WriteLine($"Registration failed: {regResult?.Message}");
@@ -161,7 +153,7 @@ StartBackgroundUpdateCheck(serverUrl, currentVersion, clientPlatform, autoUpdate
 
 using var heartbeatCts = new CancellationTokenSource();
 using var immediateFetchSignal = new SemaphoreSlim(0, 1);
-var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, isService, transportState.HttpClient, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
+var heartbeatTask = StartHeartbeatLoopAsync(serverUrl, clientId, runtimeProfile, runtimeState, proxySettings, transportState, currentVersion, clientPlatform, autoUpdate, isService, heartbeatIntervalSeconds, immediateFetchSignal, heartbeatCts.Token);
 
 // ===== 主循环 =====
 while (true)
@@ -203,10 +195,10 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
     SpeedTestTask? task = null;
     while (task is null)
     {
-        var taskResp = await transportState.HttpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
+        using var taskResp = await transportState.HttpClient.GetAsync($"{serverUrl}/api/task/{clientId}");
         taskResp.EnsureSuccessStatusCode();
-        var taskBody = await taskResp.Content.ReadAsStringAsync();
-        var taskResult = JsonSerializer.Deserialize(taskBody, AppJsonContext.Default.ApiResponseSpeedTestTask);
+        using var taskBody = await taskResp.Content.ReadAsStreamAsync();
+        var taskResult = await JsonSerializer.DeserializeAsync(taskBody, ClientJsonContext.Default.ApiResponseSpeedTestTask);
         if (taskResult?.Success == true && taskResult.Data is not null)
         {
             task = taskResult.Data;
@@ -370,7 +362,7 @@ static async Task RunTestCycleAsync(string serverUrl, string clientId, ClientRun
         Results = reportResults,
         CompletedAt = DateTime.UtcNow,
     };
-    var reportJson = JsonSerializer.Serialize(report, AppJsonContext.Default.SpeedTestReport);
+    var reportJson = JsonSerializer.Serialize(report, ClientJsonContext.Default.SpeedTestReport);
     await PostReportWithRetryAsync(serverUrl, reportJson, transportState, runtimeState);
     Console.WriteLine("OK");
     runtimeState.SetCompleted(task.IpAddresses.Count, reportResults.Count);
@@ -419,10 +411,10 @@ static async Task CheckForUpdateAsync(string serverUrl, string currentVersion, s
     string? stagingDir = null;
     try
     {
-        var resp = await transportState.HttpClient.GetAsync($"{serverUrl}/api/client/update?version={Uri.EscapeDataString(currentVersion)}&platform={Uri.EscapeDataString(clientPlatform)}");
+        using var resp = await transportState.HttpClient.GetAsync($"{serverUrl}/api/client/update?version={Uri.EscapeDataString(currentVersion)}&platform={Uri.EscapeDataString(clientPlatform)}");
         resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientUpdateInfo);
+        using var body = await resp.Content.ReadAsStreamAsync();
+        var result = await JsonSerializer.DeserializeAsync(body, ClientJsonContext.Default.ApiResponseClientUpdateInfo);
         if (result?.Success != true || result.Data is null)
         {
             Console.WriteLine($"Update check failed: {result?.Message ?? "服务器返回了无效响应"}");
@@ -757,13 +749,13 @@ static async Task<List<string>> FetchAdditionalIpsAsync(
         ExcludeIps = testedIps.ToList(),
     };
 
-    var json = JsonSerializer.Serialize(req, AppJsonContext.Default.AdditionalIpBatchRequest);
-    var resp = await httpClient.PostAsync(
+    var json = JsonSerializer.Serialize(req, ClientJsonContext.Default.AdditionalIpBatchRequest);
+    using var resp = await httpClient.PostAsync(
         $"{serverUrl}/api/task/additional",
         new StringContent(json, Encoding.UTF8, "application/json"));
     resp.EnsureSuccessStatusCode();
-    var body = await resp.Content.ReadAsStringAsync();
-    var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseAdditionalIpBatchResponse);
+    using var body = await resp.Content.ReadAsStreamAsync();
+    var result = await JsonSerializer.DeserializeAsync(body, ClientJsonContext.Default.ApiResponseAdditionalIpBatchResponse);
 
     if (result?.Success != true || result.Data is null)
     {
@@ -791,7 +783,6 @@ static Task StartHeartbeatLoopAsync(
     string clientPlatform,
     bool autoUpdate,
     bool isService,
-    HttpClient httpClient,
     int heartbeatIntervalSeconds,
     SemaphoreSlim immediateFetchSignal,
     CancellationToken cancellationToken)
@@ -850,15 +841,15 @@ static Task StartHeartbeatLoopAsync(
                     CurrentTaskStartedAt = runtimeState.StartedAt,
                     RuntimeLog = runtimeState.LogText,
                 };
-                var json = JsonSerializer.Serialize(req, AppJsonContext.Default.ClientHeartbeatRequest);
-                var resp = await transportState.HttpClient.PostAsync(
+                var json = JsonSerializer.Serialize(req, ClientJsonContext.Default.ClientHeartbeatRequest);
+                using var resp = await transportState.HttpClient.PostAsync(
                     $"{serverUrl}/api/client/heartbeat",
                     new StringContent(json, Encoding.UTF8, "application/json"),
                     cancellationToken);
                 resp.EnsureSuccessStatusCode();
 
-                var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-                var result = JsonSerializer.Deserialize(body, AppJsonContext.Default.ApiResponseClientHeartbeatResponse);
+                using var body = await resp.Content.ReadAsStreamAsync(cancellationToken);
+                var result = await JsonSerializer.DeserializeAsync(body, ClientJsonContext.Default.ApiResponseClientHeartbeatResponse, cancellationToken);
                 if (result?.Success == true && result.Data?.HeartbeatIntervalSeconds > 0)
                 {
                     heartbeatSucceeded = true;
@@ -949,10 +940,9 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
             {
                 using var receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 receiveCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(WsIdleTimeoutSeconds, intervalSeconds * 3)));
-                var body = await ReceiveWebSocketTextMessageAsync(ws, receiveBuffer, receiveCts.Token);
-                if (body is null)
+                var msg = await ReceiveWebSocketMessageAsync(ws, receiveBuffer, receiveCts.Token);
+                if (msg is null)
                     break;
-                var msg = JsonSerializer.Deserialize(body, AppJsonContext.Default.ClientWsMessage);
                 if (msg is not null)
                 {
                     ApplyAuthoritativeClientMetadata(runtimeProfile, proxySettings, transportState, msg.EffectiveIsp, msg.EffectiveName, msg.EffectiveProxyMode, msg.EffectiveProxyUrl);
@@ -985,8 +975,7 @@ static async Task<int> TryStartWebSocketHeartbeatAsync(
                 CurrentTaskStartedAt = runtimeState.StartedAt,
                 RuntimeLog = runtimeState.LogText,
             };
-            var json = JsonSerializer.Serialize(heartbeat, AppJsonContext.Default.ClientWsMessage);
-            var bytes = Encoding.UTF8.GetBytes(json);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(heartbeat, ClientJsonContext.Default.ClientWsMessage);
             await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
             var delayTask = Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cancellationToken);
             var completed = await Task.WhenAny(delayTask, receiveTask);
@@ -1074,7 +1063,8 @@ static async Task WaitForRetryOrFetchSignalAsync(TimeSpan delay, SemaphoreSlim i
 // ============================================================
 static async Task TestTcpAsync(IpTestResult result, string ip, int port, int durationSeconds)
 {
-    var latencies = new List<double>();
+    double latencySum = 0, minLatency = double.MaxValue;
+    IPAddress? address = null;
     int total = 0, success = 0;
     var deadline = Stopwatch.StartNew();
 
@@ -1088,12 +1078,14 @@ static async Task TestTcpAsync(IpTestResult result, string ip, int port, int dur
             socket.ReceiveTimeout = 3000;
             socket.SendTimeout = 3000;
 
-            var cts = new CancellationTokenSource(3000);
-            await socket.ConnectAsync(IPAddress.Parse(ip), port, cts.Token);
+            using var cts = new CancellationTokenSource(3000);
+            await socket.ConnectAsync(address ??= IPAddress.Parse(ip), port, cts.Token);
             sw.Stop();
 
             success++;
-            latencies.Add(sw.Elapsed.TotalMilliseconds);
+            var latency = sw.Elapsed.TotalMilliseconds;
+            latencySum += latency;
+            minLatency = Math.Min(minLatency, latency);
 
             try { socket.Shutdown(SocketShutdown.Both); } catch { /* ignore */ }
         }
@@ -1111,10 +1103,10 @@ static async Task TestTcpAsync(IpTestResult result, string ip, int port, int dur
     result.TcpSuccessCount = success;
     result.PacketLossRate = total > 0 ? 1.0 - (double)success / total : 1.0;
 
-    if (latencies.Count > 0)
+    if (success > 0)
     {
-        result.AvgLatencyMs = latencies.Average();
-        result.MinLatencyMs = latencies.Min();
+        result.AvgLatencyMs = latencySum / success;
+        result.MinLatencyMs = minLatency;
     }
     else
     {
@@ -1193,9 +1185,9 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
         buffer = ArrayPool<byte>.Shared.Rent(256 * 1024);
         long totalBytes = 0;
         using var setupCts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds + 10));
-        HttpResponseMessage? response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, setupCts.Token);
+        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, setupCts.Token);
         response.EnsureSuccessStatusCode();
-        Stream? dlStream = await response.Content.ReadAsStreamAsync(setupCts.Token);
+        await using var dlStream = await response.Content.ReadAsStreamAsync(setupCts.Token);
 
         using var testCts = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds));
         var sw = Stopwatch.StartNew();
@@ -1220,12 +1212,6 @@ static async Task TestDownloadAsync(IpTestResult result, string ip, string urlTe
         catch (OperationCanceledException) when (testCts.IsCancellationRequested)
         {
             // Reaching the configured duration is the successful end of the test.
-        }
-        finally
-        {
-            if (dlStream is not null)
-                await dlStream.DisposeAsync();
-            response?.Dispose();
         }
 
         sw.Stop();
@@ -1534,21 +1520,26 @@ static void TryDeleteFile(string? path)
     catch { }
 }
 
-static async Task<string?> ReceiveWebSocketTextMessageAsync(WebSocket ws, byte[] buffer, CancellationToken cancellationToken)
+static async Task<ClientWsMessage?> ReceiveWebSocketMessageAsync(WebSocket ws, byte[] buffer, CancellationToken cancellationToken)
 {
-    using var ms = new MemoryStream();
-    while (true)
+    var result = await ws.ReceiveAsync(buffer.AsMemory(), cancellationToken);
+    if (result.MessageType == WebSocketMessageType.Close)
+        return null;
+    if (result.EndOfMessage)
+        return JsonSerializer.Deserialize(buffer.AsSpan(0, result.Count), ClientJsonContext.Default.ClientWsMessage);
+
+    // Only fragmented messages need an accumulation buffer.
+    using var message = new MemoryStream();
+    message.Write(buffer, 0, result.Count);
+    do
     {
-        var result = await ws.ReceiveAsync(buffer, cancellationToken);
+        result = await ws.ReceiveAsync(buffer.AsMemory(), cancellationToken);
         if (result.MessageType == WebSocketMessageType.Close)
             return null;
+        message.Write(buffer, 0, result.Count);
+    } while (!result.EndOfMessage);
 
-        ms.Write(buffer, 0, result.Count);
-        if (result.EndOfMessage)
-            break;
-    }
-
-    return Encoding.UTF8.GetString(ms.ToArray());
+    return JsonSerializer.Deserialize(message.GetBuffer().AsSpan(0, checked((int)message.Length)), ClientJsonContext.Default.ClientWsMessage);
 }
 
 sealed class ClientRuntimeProfile
@@ -1608,6 +1599,7 @@ sealed class ClientRuntimeState
     private int _testedIps;
     private DateTime? _startedAt;
     private readonly Queue<string> _logLines = new();
+    private string? _cachedLogText;
     private const int MaxLogLines = 80;
     private const int MaxLogChars = 4000;
 
@@ -1637,9 +1629,9 @@ sealed class ClientRuntimeState
         {
             lock (_lock)
             {
+                if (_cachedLogText is not null) return _cachedLogText;
                 var text = string.Join("\n", _logLines);
-                if (text.Length <= MaxLogChars) return text;
-                return text[^MaxLogChars..];
+                return _cachedLogText = text.Length <= MaxLogChars ? text : text[^MaxLogChars..];
             }
         }
     }
@@ -1680,6 +1672,7 @@ sealed class ClientRuntimeState
     {
         lock (_lock)
         {
+            _cachedLogText = null;
             _logLines.Enqueue($"[{DateTime.Now:HH:mm:ss}] {line}");
             while (_logLines.Count > MaxLogLines)
             {
