@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 env:
-  DOTNET_VERSION: "10.0.x"
+  DOTNET_VERSION: "10.0.402"
   NODE_VERSION: "22"
   WEB_PATH: "src/CfSpeedtest.Web"
 
